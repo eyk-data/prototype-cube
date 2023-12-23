@@ -3,5 +3,9 @@ venv
 __pycache__
 .DS_Store
 
-cubeconf/*
-!cubeconf/model
+cube/*
+!cube/schema
+!cube/cube.py
+
+webapp/node_modules
+webapp/package-lock.json

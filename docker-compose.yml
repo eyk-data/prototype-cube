@@ -1,42 +1,44 @@
 version: "3"
 
 services:
-  app:
-    build: .
+  server:
+    build: server
     ports:
-      - 80:80
+      - 8000:80
     volumes:
-      - ./app:/code/app
+      - ./server:/code/app
     restart: on-failure
 
   cube:
-    image: cubejs/cube:latest
+    image: cubejs/cube:v0.34.40
     ports:
       - 4000:4000
       - 15432:15432
+      - 3030:3030
     environment:
       - CUBEJS_DEV_MODE=true
+      - CUBEJS_API_SECRET=apisecret
     volumes:
-      - ./cubeconf:/cube/conf
+      - ./cube:/cube/conf
 
   destination1:
     image: postgres:14-alpine
     ports:
-      - 5433:5432
+      - 54321:5432
     environment:
       - POSTGRES_DB=database1
       - POSTGRES_USER=username1
       - POSTGRES_PASSWORD=password1
     volumes: 
-    - ./sql/fill_destination1.sql:/docker-entrypoint-initdb.d/fill_destination1.sql
+    - ./dummy_data/destination1.sql:/docker-entrypoint-initdb.d/destination1.sql
 
   destination2:
     image: postgres:14-alpine
     ports:
-      - 5434:5432
+      - 54322:5432
     environment:
       - POSTGRES_DB=database2
       - POSTGRES_USER=username2
       - POSTGRES_PASSWORD=password2
     volumes:
-      - ./sql/fill_destination2.sql:/docker-entrypoint-initdb.d/fill_destination2.sql
+      - ./dummy_data/destination2.sql:/docker-entrypoint-initdb.d/destination2.sql
