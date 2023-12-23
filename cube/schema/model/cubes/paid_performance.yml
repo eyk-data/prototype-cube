@@ -1,7 +1,6 @@
 cubes:
   - name: paid_performance
     sql_table: public.paid_performance
-    data_source: default
 
     joins: []
 
