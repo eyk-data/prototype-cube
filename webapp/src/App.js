@@ -156,7 +156,8 @@ function MyMultiTenantDataComponent() {
 
   return (
     <div>
-      <div style={{ height: 150, padding: 20}}>
+      <hr class="rounded"></hr>
+      <div style={{ height: 150, padding: 20 }}>
         {destinations ?
           <div>
             <h2>Destinations loaded ✅</h2>
@@ -172,6 +173,7 @@ function MyMultiTenantDataComponent() {
           </div>
           : <button onClick={handleClick}>List destinations from API</button>}
       </div>
+      <h2 style={{ 'text-align': 'center' }}>💎 Data retrieved from Cube 💎</h2>
       <hr class="rounded"></hr>
       {selectedDestination ? <ChartRenderer /> : <p>No destination selected</p>}
     </div>
@@ -181,7 +183,8 @@ function MyMultiTenantDataComponent() {
 export default function MyApp() {
   return (
     <div style={{ width: 1000, margin: 'auto', padding: 50 }}>
-      <h1>Cube multi-tenancy prototype</h1>
+      <h1 style={{ 'text-align': 'center' }}>Eyk x Cube x Embeddable</h1>
+      <h2 style={{ 'text-align': 'center' }}>multi-tenancy prototype</h2>
       <MyMultiTenantDataComponent />
     </div>
   );
