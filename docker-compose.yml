@@ -9,6 +9,15 @@ services:
       - ./server:/code/app
     restart: on-failure
 
+  webapp:
+    build: webapp
+    ports:
+      - 3000:3000
+    volumes:
+      - ./webapp/public:/app/public
+      - ./webapp/src:/app/src
+    restart: on-failure
+
   cube:
     image: cubejs/cube:v0.34.40
     ports:
