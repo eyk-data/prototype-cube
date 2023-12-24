@@ -16,7 +16,8 @@ And, of course, the prototype should be minimal in the sense that it just does w
 
 ### Prototype overview
 
-Services:
+![authentication overview](images/cube-auth.png)
+
 - cube - caching layer, at startup unaware of the different destinations
 - server - backend server, holds the different destinations and their connection details
 - webapp - uses the server to list destinations, allows to select a destination, fetches data from cube for the selected destination, then shows the data in the browser
