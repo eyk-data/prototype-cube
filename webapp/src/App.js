@@ -156,14 +156,13 @@ function MyMultiTenantDataComponent() {
 
   return (
     <div>
-      {/* <div style={{ height: 30 }}> </div> */}
-      <div style={{ height: 100, padding: 20}}>
+      <div style={{ height: 150, padding: 20}}>
         {destinations ?
           <div>
-            <h2>Destinations loaded 🚀</h2>
-            <t>Select destination: </t>
+            <h2>Destinations loaded ✅</h2>
+            <p>Select destination: </p>
             <select name="Select destination" onChange={handleChangeSelect}>
-              <option>-</option>
+              <option value=''>-</option>
               {
                 destinations.map(function (d) {
                   return (<option value={d['id']}>{d['hostname']}</option>);
@@ -173,7 +172,8 @@ function MyMultiTenantDataComponent() {
           </div>
           : <button onClick={handleClick}>List destinations from API</button>}
       </div>
-      <ChartRenderer />
+      <hr class="rounded"></hr>
+      {selectedDestination ? <ChartRenderer /> : <p>No destination selected</p>}
     </div>
   );
 }
