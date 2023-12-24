@@ -3,6 +3,8 @@ from typing import Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
 from sqlmodel import Field, Session, SQLModel, create_engine, select, delete
 
 
@@ -76,8 +78,15 @@ async def lifespan(app: FastAPI):
     yield
     teardown()
 
-
 app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/destinations/")
