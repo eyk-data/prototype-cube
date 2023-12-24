@@ -3,7 +3,7 @@ from typing import Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
-from sqlmodel import Field, Session, SQLModel, create_engine, select
+from sqlmodel import Field, Session, SQLModel, create_engine, select, delete
 
 
 CUBE_API_SECRET = "apisecret"
@@ -38,24 +38,30 @@ def generate_token(destination: Destination) -> str:
 
 def setup():
     SQLModel.metadata.create_all(engine)
-    destination1 = Destination(
-        type="postgres",
-        hostname="destination1",
-        port=5432,
-        database="database1",
-        username="username1",
-        password="password1",
-    )
-    destination2 = Destination(
-        type="postgres",
-        hostname="destination2",
-        port=5432,
-        database="database2",
-        username="username2",
-        password="password2",
-    )
     with Session(engine) as session:
+        # Delete old destinations
+        statement = delete(Destination)
+        session.exec(statement)
+        session.commit()
+
+        # Create new destinations
+        destination1 = Destination(
+            type="postgres",
+            hostname="destination1",
+            port=5432,
+            database="database1",
+            username="username1",
+            password="password1",
+        )
         session.add(destination1)
+        destination2 = Destination(
+            type="postgres",
+            hostname="destination2",
+            port=5432,
+            database="database2",
+            username="username2",
+            password="password2",
+        )
         session.add(destination2)
         session.commit()
 
