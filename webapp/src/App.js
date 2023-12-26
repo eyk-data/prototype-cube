@@ -2,10 +2,11 @@ import cubejs from '@cubejs-client/core';
 import { QueryRenderer } from '@cubejs-client/react';
 import { Spin } from 'antd';
 import 'antd/dist/reset.css';
-import React, { useState } from 'react';
-import * as d3 from 'd3';
-import { Row, Col, Statistic, Table } from 'antd';
+import React, { useState, useEffect } from 'react';
+import { Table } from 'antd';
 import { useDeepCompareMemo } from 'use-deep-compare';
+import Highlight from 'react-highlight';
+
 
 const formatTableData = (columns, data) => {
   function flatten(columns = []) {
@@ -82,34 +83,52 @@ const renderChart = ({ resultSet, error, pivotConfig, onDrilldownRequested }) =>
 };
 
 function MyMultiTenantDataComponent() {
-  const [destinations, setDestinations] = useState();
-  const [selectedDestination, setSelectedDestination] = useState('');
-  const [token, setToken] = useState('');
+  const [tenants, setTenants] = useState();
+  const [selectedTenant, setSelectedTenant] = useState();
+  const [selectedDestination, setSelectedDestination] = useState();
+  const [token, setToken] = useState();
 
-  const handleClick = () => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('GET', 'http://localhost:8000/destinations/');
-    xhr.onload = function () {
-      if (xhr.status === 200) {
-        setDestinations(JSON.parse(xhr.responseText));
+  useEffect(() => {
+
+    if (selectedTenant == null) {
+      return
+    }
+
+    // Retrieve token
+    const token_request = new XMLHttpRequest();
+    token_request.open('GET', 'http://localhost:8000/tenants/' + selectedTenant.id + '/token');
+    token_request.onload = function () {
+      if (token_request.status === 200) {
+        setToken(JSON.parse(token_request.responseText));
       }
     };
-    xhr.send();
+    token_request.send();
+
+    // Retrieve destination
+    const destination_request = new XMLHttpRequest();
+    destination_request.open('GET', 'http://localhost:8000/destinations/' + selectedTenant.destination_id);
+    destination_request.onload = function () {
+      if (destination_request.status === 200) {
+        setSelectedDestination(JSON.parse(destination_request.responseText));
+      }
+    };
+    destination_request.send();
+  }, [selectedTenant]);
+
+  const handleClick = () => {
+    const request = new XMLHttpRequest();
+    request.open('GET', 'http://localhost:8000/tenants/');
+    request.onload = function () {
+      if (request.status === 200) {
+        setTenants(JSON.parse(request.responseText));
+      }
+    };
+    request.send();
   }
 
   const handleChangeSelect = (e) => {
     const id = e.target.value;
-    setSelectedDestination(id)
-
-    // Retrieve token
-    const xhr = new XMLHttpRequest();
-    xhr.open('GET', 'http://localhost:8000/destinations/' + id + '/token');
-    xhr.onload = function () {
-      if (xhr.status === 200) {
-        setToken(JSON.parse(xhr.responseText));
-      }
-    };
-    xhr.send();
+    setSelectedTenant(tenants.find(tenant => tenant.id === Number(id)));
   }
 
   const cubejsApi = cubejs(
@@ -117,7 +136,7 @@ function MyMultiTenantDataComponent() {
     { apiUrl: 'http://localhost:4000/cubejs-api/v1' }
   );
 
-  const ChartRenderer = () => {
+  const PaidPerformanceRenderer = () => {
     return (
       <QueryRenderer
         query={{
@@ -154,37 +173,107 @@ function MyMultiTenantDataComponent() {
     );
   };
 
+  const EcommerceAttributionRenderer = () => {
+    return (
+      <QueryRenderer
+        query={{
+          "measures": [
+            "ecommerce_attribution_models.total_revenue"
+          ],
+          "dimensions": [
+            "ecommerce_attribution_models.model",
+            "ecommerce_attribution_models.source",
+            "ecommerce_attribution_models.medium",
+            "ecommerce_attribution_models.campaign"
+          ],
+          "order": {
+            "ecommerce_attribution_models.total_revenue": "desc"
+          }
+        }}
+        cubejsApi={cubejsApi}
+        resetResultSetOnChange={false}
+        render={(props) => renderChart({
+          ...props,
+          chartType: 'table',
+          pivotConfig: {
+            "x": [
+              "ecommerce_attribution_models.model",
+              "ecommerce_attribution_models.source",
+              "ecommerce_attribution_models.medium",
+              "ecommerce_attribution_models.campaign"
+            ],
+            "y": [
+              "measures"
+            ],
+            "fillMissingDates": true,
+            "joinDateRange": false
+          }
+        })}
+      />
+    );
+  };
+
+
   return (
     <div>
-      <hr class="rounded"></hr>
-      <div style={{ height: 150, padding: 20 }}>
-        {destinations ?
+      <hr style={{ borderTop: "3px solid #309676" }}></hr>
+      <div style={{ height: 340, padding: 20 }}>
+        {tenants ?
           <div>
-            <h2>Destinations loaded ✅</h2>
-            <p>Select destination: </p>
-            <select name="Select destination" onChange={handleChangeSelect}>
-              <option value=''>-</option>
-              {
-                destinations.map(function (d) {
-                  return (<option value={d['id']}>{d['hostname']}</option>);
-                })
-              }
-            </select>
-          </div>
-          : <button onClick={handleClick}>List destinations from API</button>}
+            <h2>Tenants loaded ✅</h2>
+            <p>
+              Select tenant:
+              <select name="Select tenant" onChange={handleChangeSelect} style={{ margin: 10}}>
+                <option value=''>-</option>
+                {
+                  tenants.map(function (t) {
+                    return (<option key={t['id']} value={t['id']}>{t['name']}</option>);
+                  })
+                }
+              </select></p>
+            {selectedTenant ?
+              <div style={{ textAlign: 'left', display: 'flex', flexDirection: 'row', justifyContent: 'space-around' }}>
+                <div>
+                  <b>Tenant config</b>
+                  <Highlight className='json'>
+                    {JSON.stringify(selectedTenant, null, 2)}
+                  </Highlight>
+                </div>
+                <div>
+                  <b>Destination config</b>
+                  <Highlight className='json'>
+                    {JSON.stringify(selectedDestination, null, 2)}
+                  </Highlight>
+                </div>
+              </div> :
+              <div></div>
+            }
+          </div> :
+          <button onClick={handleClick}>List tenants from API</button>}
       </div>
-      <h2 style={{ 'text-align': 'center' }}>💎 Data retrieved from Cube 💎</h2>
-      <hr class="rounded"></hr>
-      {selectedDestination ? <ChartRenderer /> : <p>No destination selected</p>}
+      <h2>💎 Data retrieved from Cube 💎</h2>
+      <hr style={{ borderTop: "3px solid #309676" }}></hr>
+      <b>📢 Paid Performance 📢</b>
+      {selectedTenant ?
+        <PaidPerformanceRenderer /> :
+        <p>no tenant selected</p>
+      }
+      <hr style={{ borderTop: "2px solid #309676" }}></hr>
+      <b>🔮 Ecommerce Attribution 🔮</b>
+      {selectedTenant ?
+        <EcommerceAttributionRenderer /> :
+        <p>no tenant selected</p>
+      }
+      <hr style={{ borderTop: "2px solid #309676" }}></hr>
     </div>
   );
 }
 
 export default function MyApp() {
   return (
-    <div style={{ width: 1000, margin: 'auto', padding: 50 }}>
-      <h1 style={{ 'text-align': 'center' }}>Eyk x Cube x Embeddable</h1>
-      <h2 style={{ 'text-align': 'center' }}>multi-tenancy prototype</h2>
+    <div style={{ width: 1000, margin: 'auto', padding: 50, textAlign: 'center' }}>
+      <h1><b>Eyk x Cube x Embeddable</b></h1>
+      <h3>multi-tenancy prototype</h3>
       <MyMultiTenantDataComponent />
     </div>
   );
