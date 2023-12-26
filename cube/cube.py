@@ -1,4 +1,7 @@
-from cube import config
+from cube import config, file_repository
+from pathlib import Path
+
+CUBE_DIR = Path().cwd()
 
 
 @config("scheduled_refresh_contexts")
@@ -7,7 +10,9 @@ def scheduled_refresh_contexts() -> list[object]:
         {
             "securityContext": {
                 "tenant_id": '0',
-                "destination_config": {
+                "tenant_name": 'example_name',
+                "data_models": [],
+                "destination": {
                     "type": "postgres",
                     "hostname": "",
                     "port": None,
@@ -65,37 +70,53 @@ def pre_aggregations_schema(ctx: dict) -> str:
     return f"pre_aggregations_{tenant_id}"
 
 
-# from cube import file_repository
-# @config('repository_factory')
-# def repository_factory(ctx: dict) -> list[dict]:
-#     return file_repository(f"model/{ctx['securityContext']['tenant_id']}")
+@config('repository_factory')
+def repository_factory(ctx: dict) -> list[dict]:
+    context = ctx["securityContext"]
+    if not context:
+        print("[repository_factory] context empty security context")
+        return
+
+    data_models = context.get("data_models")
+    if not data_models:
+        print("[repository_factory] data models found in security context")
+        return
+
+    model_respositories = []
+    for data_model in data_models:
+        path = CUBE_DIR / f"model/cubes/{data_model}"
+        model_respositories += file_repository(path)
+
+    from pprint import pprint
+    print("model repositories: ", pprint(model_respositories))
+
+    return model_respositories
 
 
 @config("driver_factory")
 def driver_factory(ctx: dict) -> None:
-    print(ctx)
     context = ctx["securityContext"]
     if not context:
         print("[driver_factory] context empty security context")
         return
 
-    destination_config = context.get("destination_config")
-    if not destination_config:
-        print("[driver_factory] destination_config not found in security context")
+    destination = context.get("destination")
+    if not destination:
+        print("[driver_factory] destination not found in security context")
         return
 
-    if destination_config["type"] == "postgres":
+    if destination["type"] == "postgres":
         driver_config = {
             "type": "postgres",
-            "host": destination_config["hostname"],
-            "port": destination_config["port"],
-            "database": destination_config["database"],
-            "user": destination_config["username"],
-            "password": destination_config["password"],
+            "host": destination["hostname"],
+            "port": destination["port"],
+            "database": destination["database"],
+            "user": destination["username"],
+            "password": destination["password"],
         }
     else:
         raise NotImplementedError(
-            f"[driver_factory] type {destination_config['type']} not implemented"
+            f"[driver_factory] type {destination['type']} not implemented"
         )
 
     return driver_config
