@@ -44,12 +44,16 @@ docker compose up
 
 ### Open topics / questions
 
-- Is the implementation in `cube/cube.py` "optimal"?
-  - How to best set up default security context in `scheduled_refresh_contexts()`?
-  - How to deal with incomplete context passed in function calls, eg from default security context?
-  - Should we use a separate orchestrator per tenant? `context_to_orchestrator_id()`
-  - Anything missing?
-- Caching behavior configuration
+- Will the implementation of `cube/cube.py` be handled on the Embeddable side or on the Eyk side?
+  - If handled on the Embeddable side:
+    - We want to pass in a list of data models to include. How will this work with your implementation of `repository_factory()`?
+    - What is the structure of the security context to include in the token? Example for BigQuery would help
+  - If implemented by Eyk, is the current set-up "optimal"?
+    - How to best set up default security context in `scheduled_refresh_contexts()`?
+    - How to deal with incomplete context passed in function calls, eg from default security context?
+    - Should we use a separate orchestrator per tenant? `context_to_orchestrator_id()`
+    - Anything missing?
+- Caching behavior configuration, some examples and best practices would help here
 
 ### References
 
