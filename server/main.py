@@ -1,6 +1,7 @@
 import os
 import uuid
 import jwt
+from datetime import datetime
 from typing import Optional, List
 from contextlib import asynccontextmanager
 from enum import Enum
@@ -55,6 +56,14 @@ class Tenant(SQLModel, table=True):
 
     class Config:
         arbitrary_types_allowed = True
+
+
+class Chat(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    thread_id: str = Field(index=True, unique=True)
+    title: str = Field(default="New Chat")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 def setup():
@@ -208,6 +217,54 @@ def get_cube_token(dataset: Optional[str] = None) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Chat history endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/chats/")
+def list_chats():
+    with Session(engine) as session:
+        chats = session.exec(
+            select(Chat).order_by(Chat.updated_at.desc())
+        ).all()
+        return chats
+
+
+@app.get("/api/chats/{thread_id}/messages")
+async def get_chat_messages(thread_id: str):
+    from langchain_core.messages import HumanMessage, AIMessage
+    from app.agent.graph import get_graph
+
+    graph = await get_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    state = await graph.aget_state(config)
+
+    if not state.values:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    result = []
+    for msg in state.values.get("messages", []):
+        if isinstance(msg, HumanMessage):
+            result.append({"id": msg.id, "role": "user", "content": msg.content})
+        elif isinstance(msg, AIMessage):
+            result.append({"id": msg.id, "role": "assistant", "content": msg.content})
+    return result
+
+
+@app.delete("/api/chats/{thread_id}")
+def delete_chat(thread_id: str):
+    with Session(engine) as session:
+        chat = session.exec(
+            select(Chat).where(Chat.thread_id == thread_id)
+        ).first()
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        session.delete(chat)
+        session.commit()
+        return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # Streaming chat endpoint (Vercel AI SDK UI Message Stream Protocol v1)
 # ---------------------------------------------------------------------------
 
@@ -217,6 +274,33 @@ async def chat(request: Request):
     body = await request.json()
     messages = body.get("messages", [])
     thread_id = body.get("thread_id") or str(uuid.uuid4())
+
+    # Create or update Chat record
+    with Session(engine) as session:
+        existing = session.exec(
+            select(Chat).where(Chat.thread_id == thread_id)
+        ).first()
+        if existing:
+            existing.updated_at = datetime.utcnow()
+            session.add(existing)
+            session.commit()
+        else:
+            # Use first user message as title.
+            # AI SDK sends content as either a string or an array of
+            # content parts like [{"type": "text", "text": "..."}].
+            title = "New Chat"
+            if messages:
+                last_msg = messages[-1]
+                content = last_msg.get("content", "")
+                if isinstance(content, list):
+                    text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
+                    content = " ".join(text_parts)
+                if isinstance(content, str) and content:
+                    title = content[:100]
+            chat_record = Chat(thread_id=thread_id, title=title)
+            session.add(chat_record)
+            session.commit()
+
     return StreamingResponse(
         langgraph_to_datastream(messages, thread_id),
         media_type="text/plain; charset=utf-8",
