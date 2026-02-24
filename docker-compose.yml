@@ -21,10 +21,9 @@ services:
       - 8000:80
     volumes:
       - ./server:/code/app
-      - ./cube/gcp-credentials.json:/code/gcp-credentials.json:ro
+      - ./server/gcp-credentials.json:/code/gcp-credentials.json:ro
     env_file:
       - ./cube/.env
-      - ./server/.env
     environment:
       - GOOGLE_APPLICATION_CREDENTIALS=/code/gcp-credentials.json
     restart: on-failure
