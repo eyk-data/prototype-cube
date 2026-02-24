@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Annotated, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class CubeTimeDimension(BaseModel):
@@ -36,9 +36,9 @@ class CubeQuery(BaseModel):
             payload["timeDimensions"] = [td.model_dump(exclude_none=True) for td in self.timeDimensions]
         if self.filters:
             payload["filters"] = [f.model_dump(exclude_none=True) for f in self.filters]
-        if self.order is not None:
+        if self.order:
             payload["order"] = self.order
-        if self.limit is not None:
+        if self.limit:
             payload["limit"] = self.limit
         return payload
 
@@ -103,15 +103,30 @@ class BlockQuerySpec(BaseModel):
     """Query parameters for a single data block. The planner fills these out using cube metadata."""
     measures: List[str]
     dimensions: List[str] = Field(default_factory=list)
-    time_dimensions: Optional[List[dict]] = None
-    filters: Optional[List[dict]] = None
-    order: Optional[dict] = None
+    time_dimensions: Optional[List[CubeTimeDimension]] = None
+    filters: Optional[List[CubeFilter]] = None
+    order: Optional[dict[str, str]] = None
     limit: Optional[int] = None
     # Visualization config
     title: str
     x_or_category_key: Optional[str] = None  # For charts: the x-axis / category key
     y_or_value_key: Optional[str] = None      # For charts: the y-axis / value key
     columns: Optional[List[str]] = None       # For tables: which columns to display
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def coerce_zero_limit(cls, v):
+        return v if v else None
+
+    @field_validator("filters", mode="before")
+    @classmethod
+    def coerce_empty_filters(cls, v):
+        return v if v else None
+
+    @field_validator("order", mode="before")
+    @classmethod
+    def coerce_empty_order(cls, v):
+        return v if v else None
 
 
 class BlockPlan(BaseModel):
@@ -125,6 +140,7 @@ class BlockPlan(BaseModel):
 
 class ReportPlan(BaseModel):
     """The planner's structured output — the full report blueprint."""
+    domain: Literal["marketing", "sales"]
     summary_title: str
     narrative_strategy: str  # How the blocks build on each other
     blocks: List[BlockPlan]

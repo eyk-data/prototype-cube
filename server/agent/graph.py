@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -7,6 +8,8 @@ import psycopg
 from psycopg.rows import dict_row
 import uuid
 from typing import Annotated, Optional
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +21,7 @@ from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
 from . import cube_client
-from .cube_meta import get_cube_meta_context
+from .cube_meta import get_cube_meta_context, get_valid_member_names
 from .models import (
     AnalyticsReport,
     BarChartBlock,
@@ -40,6 +43,73 @@ from .specialists import SPECIALISTS
 from .tools import cube_builder_tool
 
 MAX_REVISIONS = 2
+MAX_BLOCK_RETRIES = 2
+TRANSIENT_RETRY_DELAY = 1.0
+
+FEW_SHOT_EXAMPLES = """\
+## Examples
+
+### Example 1 — Trend question (line chart WITH granularity)
+Question: "How has our ad spend trended over the last 6 months?"
+```json
+{
+  "domain": "marketing",
+  "summary_title": "Ad Spend Trend — Last 6 Months",
+  "narrative_strategy": "Show the monthly ad spend trend with a line chart, preceded by a brief summary.",
+  "blocks": [
+    {"block_id": "block_1", "block_type": "text", "purpose": "Summarize the overall ad spend trend", "query_spec": null, "text_guidance": "Describe the overall ad spend trajectory over the past 6 months."},
+    {"block_id": "block_2", "block_type": "chart_line", "purpose": "Visualize monthly ad spend over time",
+     "query_spec": {
+       "measures": ["fact_daily_ads.cost"],
+       "dimensions": [],
+       "time_dimensions": [{"dimension": "fact_daily_ads.date", "granularity": "month", "dateRange": "Last 6 months"}],
+       "filters": null, "order": null, "limit": null,
+       "title": "Monthly Ad Spend", "x_or_category_key": "fact_daily_ads.date.month", "y_or_value_key": "fact_daily_ads.cost",
+       "columns": null
+     }, "text_guidance": null}
+  ],
+  "conversational_response": false
+}
+```
+
+### Example 2 — Ranking question (bar chart, NO granularity)
+Question: "What are the top 10 products by gross sales this month?"
+```json
+{
+  "domain": "sales",
+  "summary_title": "Top 10 Products by Gross Sales — This Month",
+  "narrative_strategy": "Rank products by gross sales in a bar chart, with a text summary highlighting the leader.",
+  "blocks": [
+    {"block_id": "block_1", "block_type": "chart_bar", "purpose": "Rank the top 10 products by gross sales",
+     "query_spec": {
+       "measures": ["fact_sales_items.gross_sales"],
+       "dimensions": ["dim_product_variants.combined_name"],
+       "time_dimensions": [{"dimension": "fact_sales_items.line_timestamp", "dateRange": "This month"}],
+       "filters": null, "order": {"fact_sales_items.gross_sales": "desc"}, "limit": 10,
+       "title": "Top 10 Products by Gross Sales", "x_or_category_key": "dim_product_variants.combined_name", "y_or_value_key": "fact_sales_items.gross_sales",
+       "columns": null
+     }, "text_guidance": null},
+    {"block_id": "block_2", "block_type": "text", "purpose": "Highlight the top seller", "query_spec": null, "text_guidance": "Call out the #1 product and its gross sales figure."}
+  ],
+  "conversational_response": false
+}
+```
+
+### Example 3 — Conversational follow-up (text-only, no queries)
+Question: "Which one had the highest margin?"
+```json
+{
+  "domain": "sales",
+  "summary_title": "Highest Margin Product",
+  "narrative_strategy": "Answer from conversation history — no new queries needed.",
+  "blocks": [
+    {"block_id": "block_1", "block_type": "text", "purpose": "Answer the follow-up question using prior data", "query_spec": null, "text_guidance": "Based on the data shown above, Product X had the highest gross margin at Y%."}
+  ],
+  "conversational_response": true
+}
+```
+
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -98,8 +168,8 @@ def _build_cube_query_from_spec(spec: BlockQuerySpec) -> dict | None:
     result = cube_builder_tool.invoke({
         "measures": spec.measures,
         "dimensions": spec.dimensions,
-        "time_dimensions": spec.time_dimensions,
-        "filters": spec.filters,
+        "time_dimensions": [td.model_dump(exclude_none=True) for td in spec.time_dimensions] if spec.time_dimensions else None,
+        "filters": [f.model_dump(exclude_none=True) for f in spec.filters] if spec.filters else None,
         "order": spec.order,
         "limit": spec.limit,
     })
@@ -136,33 +206,81 @@ def _format_conversation_history(messages: list[BaseMessage], max_messages: int 
 # Nodes
 # ---------------------------------------------------------------------------
 
-async def router_node(state: AgentState) -> dict:
-    """Classify the user question into a specialist domain."""
+def _is_transient_error(exc: Exception) -> bool:
+    """Return True for transient errors that may succeed on retry."""
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500:
+        return True
+    if isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError)):
+        return True
+    return False
+
+
+async def _llm_correct_query(
+    block_plan: BlockPlan,
+    failed_query: dict,
+    error_msg: str,
+    cube_meta_context: str,
+) -> BlockQuerySpec | None:
+    """Ask the LLM to fix a failed Cube query. Returns corrected spec or None."""
     llm = _get_llm()
-    system = SystemMessage(
-        content=(
-            "You are a routing agent. Given the user's question and conversation "
-            "history, respond with ONLY one word: either 'marketing' or 'sales'.\n\n"
-            "Marketing topics: ads, campaigns, impressions, clicks, CTR, CPC, CPM, "
-            "ROAS, CPA, attribution, email performance, ad spend, channel revenue.\n\n"
-            "Sales topics: orders, revenue, products, customers, gross profit, margins, "
-            "discounts, returns, shipping, AOV, SKUs, variants, stores.\n\n"
-            "For follow-up questions (e.g. 'what about last month?'), infer the domain "
-            "from the prior conversation.\n\n"
-            "If unsure, default to 'marketing'."
-        )
+    correction_prompt = (
+        "A Cube query failed. Fix the query based on the error and metadata.\n\n"
+        f"Block purpose: {block_plan.purpose}\n"
+        f"Block type: {block_plan.block_type}\n\n"
+        f"Failed query:\n{json.dumps(failed_query, indent=2)}\n\n"
+        f"Error:\n{error_msg}\n\n"
+        f"Cube metadata:\n{cube_meta_context}\n\n"
+        "Return a corrected BlockQuerySpec. Use only valid member names from the metadata."
     )
-    recent_messages = state["messages"][-6:]
+    try:
+        corrected: BlockQuerySpec = await llm.with_structured_output(BlockQuerySpec).ainvoke(
+            [HumanMessage(content=correction_prompt)]
+        )
+        return corrected
+    except Exception as exc:
+        logger.warning("LLM query correction failed: %s", exc)
+        return None
 
-    response = await llm.ainvoke([system] + recent_messages)
-    domain = response.content.strip().lower()
-    if domain not in SPECIALISTS:
-        domain = "marketing"
 
-    thought = f"Analyzing your question — routing to the {domain} analytics specialist."
+def _validate_plan_members(plan: ReportPlan, valid_members: set[str]) -> list[str]:
+    """Check all member names in a ReportPlan against valid cube members.
+
+    Returns list of error strings for invalid names.
+    """
+    errors: list[str] = []
+    for block in plan.blocks:
+        spec = block.query_spec
+        if not spec:
+            continue
+        prefix = f"Block {block.block_id}"
+        for m in spec.measures:
+            if m not in valid_members:
+                errors.append(f"{prefix}: invalid measure '{m}'")
+        for d in spec.dimensions:
+            if d not in valid_members:
+                errors.append(f"{prefix}: invalid dimension '{d}'")
+        if spec.time_dimensions:
+            for td in spec.time_dimensions:
+                dim = td.dimension
+                if dim and dim not in valid_members:
+                    errors.append(f"{prefix}: invalid time dimension '{dim}'")
+        if spec.filters:
+            for f in spec.filters:
+                member = f.member
+                if member and member not in valid_members:
+                    errors.append(f"{prefix}: invalid filter member '{member}'")
+        if spec.order:
+            for key in spec.order:
+                # Strip granularity suffix: fact_daily_ads.date.month → fact_daily_ads.date
+                base_key = ".".join(key.split(".")[:2]) if key.count(".") >= 2 else key
+                if base_key not in valid_members:
+                    errors.append(f"{prefix}: invalid order key '{key}'")
+    return errors
+
+
+def _reset_turn_state() -> dict:
+    """Return the per-turn reset dict (applied on first planner call each turn)."""
     return {
-        "specialist_domain": domain,
-        # Reset per-turn state
         "report_plan": None,
         "executed_blocks": [],
         "current_block_index": 0,
@@ -170,24 +288,37 @@ async def router_node(state: AgentState) -> dict:
         "review_result": None,
         "revision_count": 0,
         "analytics_report": None,
-        "thought_log": [thought],
+        "thought_log": [],
     }
 
 
 async def planner_node(state: AgentState) -> dict:
     """Plan a multi-block analytics report using structured output."""
     llm = _get_llm()
-    config = SPECIALISTS[state["specialist_domain"]]
     cube_meta_context = await get_cube_meta_context()
+
+    # Detect first call vs revision
+    is_first_call = state.get("report_plan") is None and state.get("revision_count", 0) == 0
 
     question = _get_user_question(state)
 
+    # --- Static section (cacheable prefix — stable across calls) ---
     system_parts = [
         "You are an analytics report planner. Your job is to design a structured report "
         "that best answers the user's question with appropriate data visualizations.\n\n",
 
-        "## Domain Expertise\n",
-        config.system_instructions,
+        "## Domain Classification\n"
+        "Set the `domain` field to \"marketing\" or \"sales\" based on the question.\n"
+        "- marketing: ads, campaigns, impressions, clicks, CTR, CPC, CPM, ROAS, attribution, email, ad spend\n"
+        "- sales: orders, revenue, products, customers, margins, discounts, returns, shipping, AOV, SKUs\n"
+        "For follow-ups, infer from conversation history. Default to \"marketing\" if unsure.\n\n",
+
+        "## Domain Expertise: Marketing\n",
+        SPECIALISTS["marketing"].system_instructions,
+        "\n\n",
+
+        "## Domain Expertise: Sales\n",
+        SPECIALISTS["sales"].system_instructions,
         "\n\n",
 
         "## Available Block Types\n"
@@ -229,12 +360,16 @@ async def planner_node(state: AgentState) -> dict:
         "If the question requires new data not present in conversation history, "
         "set `conversational_response` to false and plan data blocks as normal.\n\n",
 
-        "## Conversation History\n",
-        _format_conversation_history(state["messages"][:-1]),
-        "\n\n",
+        FEW_SHOT_EXAMPLES,
 
         "## Cube Metadata\n",
         cube_meta_context,
+        "\n\n",
+
+        # --- Dynamic section (per-request, not cached) ---
+
+        "## Conversation History\n",
+        _format_conversation_history(state["messages"][:-1]),
     ]
 
     # If revising after review, include the feedback
@@ -258,6 +393,28 @@ async def planner_node(state: AgentState) -> dict:
     structured_llm = llm.with_structured_output(ReportPlan)
     try:
         plan: ReportPlan = await structured_llm.ainvoke(messages)
+
+        # Validate member names against cube metadata
+        valid_members = await get_valid_member_names()
+        if valid_members is not None:
+            member_errors = _validate_plan_members(plan, valid_members)
+            if member_errors:
+                logger.warning("Plan has invalid member names: %s", member_errors)
+                # Re-invoke with validation feedback appended
+                validation_msg = (
+                    "\n\n## Member Name Validation Errors\n"
+                    "Your previous plan used invalid cube member names. Fix these:\n"
+                    + "\n".join(f"- {e}" for e in member_errors)
+                    + "\n\nUse ONLY member names from the Cube Metadata section above."
+                )
+                retry_system = SystemMessage(content="".join(system_parts) + validation_msg)
+                retry_messages = [retry_system] + state["messages"]
+                plan = await structured_llm.ainvoke(retry_messages)
+                # Check again; if still invalid, log and proceed
+                retry_errors = _validate_plan_members(plan, valid_members)
+                if retry_errors:
+                    logger.warning("Plan still has invalid members after retry: %s", retry_errors)
+
     except Exception as exc:
         logger.warning("Planner structured output failed: %s", exc)
         # Fall back to a text-only report
@@ -270,12 +427,24 @@ async def planner_node(state: AgentState) -> dict:
             ],
         )
         ai_text = render_report_as_text(report)
-        return {
+        result = {
             "analytics_report": report.model_dump(),
             "messages": [AIMessage(content=ai_text)],
+            "specialist_domain": "marketing",
         }
+        if is_first_call:
+            result.update(_reset_turn_state())
+            result["analytics_report"] = report.model_dump()
+        return result
+
+    # Reorder: data blocks first, text blocks last — ensures text blocks have data context
+    data_blocks = [b for b in plan.blocks if b.block_type != "text"]
+    text_blocks = [b for b in plan.blocks if b.block_type == "text"]
+    plan.blocks = data_blocks + text_blocks
 
     logger.info("ReportPlan:\n%s", plan.model_dump_json(indent=2))
+
+    routing_thought = f"Routing to {plan.domain} analytics specialist."
 
     # Check if the plan has any data blocks at all
     has_data_blocks = any(b.block_type != "text" for b in plan.blocks)
@@ -315,19 +484,30 @@ async def planner_node(state: AgentState) -> dict:
             ],
         )
         ai_text = render_report_as_text(report)
-        return {
+        result = {
             "analytics_report": report.model_dump(),
             "messages": [AIMessage(content=ai_text)],
+            "specialist_domain": plan.domain,
         }
+        if is_first_call:
+            result.update(_reset_turn_state())
+            result["analytics_report"] = report.model_dump()
+        return result
 
     n_blocks = len(plan.blocks)
     thought = f"Planning report: {plan.summary_title} ({n_blocks} blocks)"
-    return {
+    result = {
         "report_plan": plan.model_dump(),
-        "thought_log": state.get("thought_log", []) + [thought],
+        "thought_log": state.get("thought_log", []) + [routing_thought, thought],
         "executed_blocks": [],
         "current_block_index": 0,
+        "specialist_domain": plan.domain,
     }
+    if is_first_call:
+        result.update(_reset_turn_state())
+        result["report_plan"] = plan.model_dump()
+        result["thought_log"] = [routing_thought, thought]
+    return result
 
 
 async def block_executor_node(state: AgentState) -> dict:
@@ -389,7 +569,7 @@ async def block_executor_node(state: AgentState) -> dict:
         thought = f"Executed block {idx + 1}/{len(plan.blocks)}: text"
 
     else:
-        # Data block — build query, execute
+        # Data block — build query, execute with retry
         spec = block_plan.query_spec
         if not spec:
             executed_block = ExecutedBlock(
@@ -410,29 +590,60 @@ async def block_executor_node(state: AgentState) -> dict:
                 block_errors = block_errors + [f"Block {block_plan.block_id}: query validation failed"]
                 thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {block_plan.block_type} (validation error)"
             else:
-                try:
-                    query_obj = CubeQuery(**cube_query) if isinstance(cube_query, dict) else cube_query
-                    logger.info("Executing block %s query:\n%s", block_plan.block_id, query_obj.model_dump_json(indent=2))
-                    result = await cube_client.execute_cube_query(query_obj)
-                    data = result.get("data", [])
+                current_query = cube_query
+                last_error: str | None = None
+                data: list[dict] | None = None
 
+                for attempt in range(1 + MAX_BLOCK_RETRIES):
+                    try:
+                        query_obj = CubeQuery(**current_query) if isinstance(current_query, dict) else current_query
+                        logger.info(
+                            "Executing block %s query (attempt %d):\n%s",
+                            block_plan.block_id, attempt + 1, query_obj.model_dump_json(indent=2),
+                        )
+                        result = await cube_client.execute_cube_query(query_obj)
+                        data = result.get("data", [])
+                        last_error = None
+                        break  # success
+                    except Exception as exc:
+                        last_error = str(exc)
+                        logger.warning(
+                            "Block %s attempt %d failed: %s", block_plan.block_id, attempt + 1, last_error,
+                        )
+                        if attempt >= MAX_BLOCK_RETRIES:
+                            break
+                        if _is_transient_error(exc):
+                            await asyncio.sleep(TRANSIENT_RETRY_DELAY * (attempt + 1))
+                        else:
+                            # Try LLM correction
+                            cube_meta_context = await get_cube_meta_context()
+                            corrected = await _llm_correct_query(
+                                block_plan, current_query, last_error, cube_meta_context,
+                            )
+                            if corrected:
+                                new_query = _build_cube_query_from_spec(corrected)
+                                if new_query:
+                                    current_query = new_query
+                                    continue
+                            break  # correction failed, stop retrying
+
+                if last_error:
                     executed_block = ExecutedBlock(
                         block_id=block_plan.block_id,
                         block_plan=block_plan,
-                        cube_query=cube_query,
+                        cube_query=current_query,
+                        error=last_error,
+                    )
+                    block_errors = block_errors + [f"Block {block_plan.block_id}: {last_error}"]
+                    thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {block_plan.block_type} (error)"
+                else:
+                    executed_block = ExecutedBlock(
+                        block_id=block_plan.block_id,
+                        block_plan=block_plan,
+                        cube_query=current_query,
                         data=data,
                     )
-                    thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {block_plan.block_type} ({len(data)} rows)"
-                except Exception as exc:
-                    error_msg = str(exc)
-                    executed_block = ExecutedBlock(
-                        block_id=block_plan.block_id,
-                        block_plan=block_plan,
-                        cube_query=cube_query,
-                        error=error_msg,
-                    )
-                    block_errors = block_errors + [f"Block {block_plan.block_id}: {error_msg}"]
-                    thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {block_plan.block_type} (error)"
+                    thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {block_plan.block_type} ({len(data or [])} rows)"
 
     return {
         "executed_blocks": executed + [executed_block.model_dump()],
@@ -450,32 +661,41 @@ async def reviewer_node(state: AgentState) -> dict:
     executed = state.get("executed_blocks", [])
     revision_count = state.get("revision_count", 0)
 
-    # Build summary of executed blocks for the reviewer
+    # Build detailed summary of executed blocks for the reviewer
     block_summaries = []
     for eb_data in executed:
         eb = ExecutedBlock(**eb_data)
-        summary = f"- {eb.block_id} ({eb.block_plan.block_type}): "
+        parts = [f"- **{eb.block_id}** ({eb.block_plan.block_type}) — Purpose: {eb.block_plan.purpose}"]
         if eb.error:
-            summary += f"ERROR: {eb.error}"
+            parts.append(f"  ERROR: {eb.error}")
         elif eb.text_content:
-            summary += f"text ({len(eb.text_content)} chars)"
+            parts.append(f"  Text content: {eb.text_content}")
         elif eb.data is not None:
-            summary += f"{len(eb.data)} rows"
+            parts.append(f"  Rows: {len(eb.data)}")
+            if eb.data:
+                preview = json.dumps(eb.data[:5], default=str)
+                parts.append(f"  Data preview (first 5 rows): {preview}")
+            if eb.cube_query:
+                parts.append(f"  Query: {json.dumps(eb.cube_query, default=str)}")
         else:
-            summary += "no data"
-        block_summaries.append(summary)
+            parts.append("  No data")
+        block_summaries.append("\n".join(parts))
+
+    narrative_strategy = plan_data.get("narrative_strategy", "") if plan_data else ""
 
     review_prompt = (
         "You are a quality reviewer for analytics reports. Evaluate whether the "
         "executed report blocks adequately answer the user's question.\n\n"
         f"User's question: {question}\n\n"
-        f"Report plan: {json.dumps(plan_data, default=str)}\n\n"
-        f"Executed blocks:\n" + "\n".join(block_summaries) + "\n\n"
+        f"Narrative strategy: {narrative_strategy}\n\n"
+        "Executed blocks:\n" + "\n".join(block_summaries) + "\n\n"
         "Evaluate on these criteria:\n"
         "1. Relevance: Do the blocks answer the user's question?\n"
         "2. Data accuracy: Are there execution errors?\n"
         "3. Visualization fit: Are the chart types appropriate?\n"
-        "4. Completeness: Is anything missing?\n\n"
+        "4. Completeness: Is anything missing?\n"
+        "5. Text quality: Do text blocks provide meaningful insight with specific numbers?\n\n"
+        "Reference specific data values from the previews in your assessment. "
         "Score from 1-5 (5 is best). Set approved=true if score >= 4. "
         "If not approved, provide specific revision_instructions for the planner."
     )
@@ -511,8 +731,11 @@ async def assembler_node(state: AgentState) -> dict:
     for thought in state.get("thought_log", []):
         blocks.append(ThoughtBlock(content=thought))
 
+    # Sort executed blocks by block_id to restore planner's narrative order
+    executed_sorted = sorted(executed, key=lambda eb: eb["block_id"])
+
     # Convert executed blocks into report blocks
-    for eb_data in executed:
+    for eb_data in executed_sorted:
         eb = ExecutedBlock(**eb_data)
         bp = eb.block_plan
 
@@ -652,15 +875,13 @@ def after_reviewer(state: AgentState) -> str:
 def build_workflow() -> StateGraph:
     workflow = StateGraph(AgentState)
 
-    workflow.add_node("router", router_node)
     workflow.add_node("planner", planner_node)
     workflow.add_node("block_executor", block_executor_node)
     workflow.add_node("reviewer", reviewer_node)
     workflow.add_node("assembler", assembler_node)
     workflow.add_node("formatter_error", formatter_error_node)
 
-    workflow.set_entry_point("router")
-    workflow.add_edge("router", "planner")
+    workflow.set_entry_point("planner")
     workflow.add_conditional_edges("planner", after_planner, {
         "block_executor": "block_executor",
         "end": END,
