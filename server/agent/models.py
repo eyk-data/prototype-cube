@@ -128,6 +128,7 @@ class ReportPlan(BaseModel):
     summary_title: str
     narrative_strategy: str  # How the blocks build on each other
     blocks: List[BlockPlan]
+    conversational_response: bool = False  # True when answering from conversation history
 
 
 class ExecutedBlock(BaseModel):

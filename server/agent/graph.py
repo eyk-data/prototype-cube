@@ -114,6 +114,24 @@ def _get_user_question(state: AgentState) -> str:
     return user_messages[-1].content if user_messages else ""
 
 
+def _format_conversation_history(messages: list[BaseMessage], max_messages: int = 10) -> str:
+    """Format recent conversation turns into a readable string for LLM context.
+
+    Truncates AI messages to avoid flooding the prompt with verbose report JSON.
+    """
+    recent = messages[-max_messages:]
+    parts = []
+    for msg in recent:
+        if isinstance(msg, HumanMessage):
+            parts.append(f"User: {msg.content}")
+        elif isinstance(msg, AIMessage):
+            content = msg.content
+            if len(content) > 1500:
+                content = content[:1500] + "... [truncated]"
+            parts.append(f"Assistant: {content}")
+    return "\n\n".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Nodes
 # ---------------------------------------------------------------------------
@@ -198,6 +216,23 @@ async def planner_node(state: AgentState) -> dict:
         "- Text blocks don't need query_spec (set to null).\n"
         "- For text blocks, set text_guidance describing what to write about.\n\n",
 
+        "## Conversational Follow-Ups\n"
+        "Before planning any data queries, check the conversation history below.\n"
+        "If the user's question can be answered from previous results already in the "
+        "conversation (e.g. 'what was the best selling product?' after you already showed "
+        "top products), or if the user explicitly says 'do not run a query':\n"
+        "- Set `conversational_response` to true\n"
+        "- Produce ONLY text blocks (no data blocks)\n"
+        "- Write the **actual answer** in `text_guidance` — include specific numbers and "
+        "details from the conversation history. Do NOT write vague planning notes.\n"
+        "- Respect explicit user instructions like 'do not run a query'\n\n"
+        "If the question requires new data not present in conversation history, "
+        "set `conversational_response` to false and plan data blocks as normal.\n\n",
+
+        "## Conversation History\n",
+        _format_conversation_history(state["messages"][:-1]),
+        "\n\n",
+
         "## Cube Metadata\n",
         cube_meta_context,
     ]
@@ -246,12 +281,30 @@ async def planner_node(state: AgentState) -> dict:
     has_data_blocks = any(b.block_type != "text" for b in plan.blocks)
 
     if not has_data_blocks:
-        # Pure text response — no queries needed, assemble directly
+        # Pure text response — no queries needed
         text_parts = []
         for block in plan.blocks:
             if block.text_guidance:
                 text_parts.append(block.text_guidance)
-        combined_text = " ".join(text_parts) if text_parts else plan.narrative_strategy
+        raw_guidance = " ".join(text_parts) if text_parts else plan.narrative_strategy
+
+        if plan.conversational_response:
+            # Planner wrote the actual answer (with numbers) in text_guidance
+            combined_text = raw_guidance
+        else:
+            # text_guidance is a planning note — call LLM to generate proper prose
+            llm = _get_llm()
+            history = _format_conversation_history(state["messages"][:-1])
+            gen_prompt = (
+                f"User's question: {question}\n\n"
+                f"Conversation history:\n{history}\n\n"
+                f"Report guidance: {raw_guidance}\n\n"
+                "Write a clear, concise response that directly answers the user's question. "
+                "Use specific numbers from the conversation history or guidance if available. "
+                "Do not use markdown headers."
+            )
+            response = await llm.ainvoke([HumanMessage(content=gen_prompt)])
+            combined_text = response.content.strip()
 
         report = AnalyticsReport(
             report_id=str(uuid.uuid4()),
@@ -311,14 +364,18 @@ async def block_executor_node(state: AgentState) -> dict:
 
         data_context = "\n".join(data_context_parts) if data_context_parts else "No data available yet."
 
+        history = _format_conversation_history(state["messages"][:-1])
+
         text_prompt = (
             f"User's question: {question}\n\n"
+            f"Conversation history:\n{history}\n\n"
             f"Report context: {plan.narrative_strategy}\n\n"
             f"This text block's purpose: {block_plan.purpose}\n"
             f"Guidance: {block_plan.text_guidance or 'Write a clear, concise paragraph.'}\n\n"
             f"Available data from other blocks:\n{data_context}\n\n"
             "Write a clear, concise paragraph that directly addresses the purpose above. "
-            "Use specific numbers from the data if available. Do not use markdown headers."
+            "Use specific numbers from the data and conversation history if available. "
+            "Do not use markdown headers."
         )
 
         response = await llm.ainvoke([HumanMessage(content=text_prompt)])
