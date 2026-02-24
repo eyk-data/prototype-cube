@@ -1,0 +1,417 @@
+cubes:
+  - name: fact_sales_items
+    title: Sales Items
+    description: Item level table of sales
+    sql: SELECT * FROM { COMPILE_CONTEXT.securityContext.dataset }.fact_sales_items
+
+    joins:
+      - name: dim_product_variants
+        sql: "{CUBE}.variant_sk = {dim_product_variants}.sk"
+        relationship: many_to_one
+
+      - name: dim_customers
+        sql: "{CUBE}.customer_sk = {dim_customers}.sk"
+        relationship: many_to_one
+
+    dimensions:
+
+      - name: source
+        title: Source
+        description: The platform where the data originates from
+        sql: source
+        type: string
+
+      - name: line_sk
+        title: Line SK
+        primary_key: true
+        shown: true
+        description: The surrogate key for the line item
+        sql: line_sk
+        type: number
+
+      - name: group_sk
+        title: Group SK
+        description: The surrogate key for the group
+        sql: group_sk
+        type: number
+
+      - name: store
+        title: Store
+        description: The store where the order has been made
+        sql: store_name
+        type: string
+
+      - name: source_store
+        title: Source - store
+        description: The source and store where the order has been made
+        sql: CONCAT(source, ' - ', store_name)
+        type: string
+
+      - name: sales_channel
+        title: Sales Channel
+        description: The sales channel where the order has been made
+        sql: sales_channel
+        type: string
+
+      - name: line_id
+        title: Line ID
+        description: Unique identifier for the sales line item
+        sql: line_id
+        type: string
+
+      - name: line_type
+        title: Line Type
+        description: Type of the sales line item
+        sql: line_type
+        type: string
+
+      - name: line_timestamp
+        title: Line Timestamp
+        description: Timestamp of the sales line item
+        sql: line_timestamp
+        type: time
+
+      - name: line_status
+        title: Line Status
+        description: Status of the sales line item
+        sql: line_status
+        type: string
+
+      - name: group_id
+        title: Group ID
+        description: Group identifier for the order
+        sql: group_id
+        type: string
+
+      - name: group_type
+        title: Group Type
+        description: Type of the order group
+        sql: group_type
+        type: string
+
+      - name: group_status
+        title: Group Status
+        description: Status of the order group
+        sql: group_status
+        type: string
+
+      - name: group_timestamp
+        title: Group Timestamp
+        description: Timestamp of the order group
+        sql: group_timestamp
+        type: time
+
+      - name: group_uri
+        title: Group URI
+        description: URI identifier for the order group
+        sql: group_uri
+        type: string
+
+      - name: group_uri_aliases
+        title: Group URI Aliases
+        description: Alternative URI identifiers for the order group
+        sql: ARRAY_TO_STRING(group_uri_aliases, ", ")
+        type: string
+
+      - name: order_meta_data
+        title: Order Meta Data
+        description: Meta data for the order
+        sql: ARRAY_TO_STRING(meta_data, ", ")
+        type: string
+
+      - name: first_time_customer
+        title: First Time Customer
+        description: Whether this is a first-time customer
+        sql: first_time_customer
+        type: boolean
+
+      - name: first_subscription_group
+        title: First Subscription Group
+        description: Whether this is the first subscription group
+        sql: first_subscription_group
+        type: boolean
+
+      - name: billing_country_code
+        title: Billing Country
+        description: Country code from billing address
+        sql: billing_country_code
+        type: string
+
+      - name: shipping_country_code
+        title: Shipping Country
+        description: Country code from shipping address
+        sql: shipping_country_code
+        type: string
+
+      - name: customer_id
+        title: Customer ID
+        description: Customer identifier from the source system
+        sql: customer_id
+        type: string
+
+      - name: eyk_customer_id
+        title: EYK Customer ID
+        description: Internal customer identifier
+        sql: eyk_customer_id
+        type: string
+
+      - name: customer_sk
+        title: Customer SK
+        description: Customer surrogate key
+        sql: customer_sk
+        type: number
+
+      - name: product_id
+        title: Product ID
+        description: Product identifier
+        sql: product_id
+        type: string
+
+      - name: variant_id
+        title: Variant ID
+        description: Product variant identifier
+        sql: variant_id
+        type: string
+
+      - name: variant_sk
+        title: Variant SK
+        description: Product variant surrogate key
+        sql: variant_sk
+        type: number
+
+      - name: orders_search_field
+        title: Search Field for Orders
+        description: Search field, combination of order id and customer search field
+        sql: orders_search_field
+        type: string
+
+    measures:
+      - name: count_items
+        title: Count items
+        description: Total number of distinct items
+        type: count_distinct
+        sql: line_id
+        format: number
+
+      - name: count_groups
+        title: Count groups
+        description: Total number of distinct groups
+        type: count_distinct
+        sql: group_id
+        format: number
+
+      - name: net_quantity
+        title: Net quantity
+        description: Number of items ordered minus number of returned items
+        type: sum
+        sql: net_quantity
+        format: number
+
+      - name: gross_sales
+        title: Gross sales
+        description: The total gross sales (product price x quantity - before taxes, shipping, discounts, and returns)
+        type: sum
+        sql: gross_sales
+        format: number
+
+      - name: discounts
+        title: Discounts
+        description: The total amount of discount given
+        type: sum
+        sql: -discounts
+        format: number
+
+      - name: returns
+        title: Returns
+        description: The total amount of returned revenue
+        type: sum
+        sql: -returns
+        format: number
+
+      - name: net_sales
+        title: Net sales
+        description: Net sales is calculated as gross sales - discounts - returns
+        type: sum
+        sql: net_sales
+        format: number
+
+      - name: shipping
+        title: Shipping
+        description: The total amount of shipping costs
+        type: sum
+        sql: shipping
+        format: number
+
+      - name: taxes
+        title: Taxes
+        description: The total tax amount
+        type: sum
+        sql: taxes
+        format: number
+
+      - name: total_sales
+        title: Total sales
+        description: Total sales equates to gross sales - discounts - returns + taxes + duties + shipping charges + fees
+        type: sum
+        sql: total_sales
+        format: number
+
+      - name: product_cost
+        title: Product cost
+        description: Cost of the product
+        type: sum
+        sql: "{CUBE}.product_cost"
+        format: number
+
+      - name: product_cost_fallback
+        title: Product cost fallback
+        description: Fallback cost of the product
+        type: sum
+        sql: product_cost_fallback
+        format: number
+
+      - name: product_cost_combined
+        title: Combined product cost
+        description: Product cost used in profit calculation, combination of Product cost and Product cost fallback
+        type: sum
+        sql: "COALESCE({CUBE}.product_cost, product_cost_fallback)"
+        format: number
+
+      - name: payment_cost
+        title: Payment cost
+        description: Cost of payment processing
+        type: sum
+        sql: payment_cost
+        format: number
+
+      - name: packaging_cost
+        title: Packaging cost
+        description: Cost of packaging
+        type: sum
+        sql: packaging_cost
+        format: number
+
+      - name: shipping_cost
+        title: Shipping cost
+        description: Cost of shipping
+        type: sum
+        sql: shipping_cost
+        format: number
+
+      - name: gross_profit
+        title: Gross profit
+        description: Gross profit calculated as net sales - total costs
+        type: sum
+        sql: gross_profit
+        format: number
+
+      # CALCULATED METRICS
+
+      - name: customers
+        title: Customers
+        description: Number of unique customers
+        type: count_distinct
+        sql: IF(line_type = "item", customer_sk, NULL)
+        format: number
+
+      - name: orders
+        title: Orders
+        description: Number of unique orders
+        type: count_distinct
+        sql: IF(line_type = "item", group_sk, NULL)
+        format: number
+
+      - name: first_time_customer_orders
+        title: First-time customer orders
+        description: Number of orders from first-time customer
+        type: count_distinct
+        sql: IF(line_type = "item" AND first_time_customer, group_sk, NULL)
+        format: number
+
+      - name: returning_customer_orders
+        title: Returning customer orders
+        description: Number of orders from returning customers
+        type: count_distinct
+        sql: IF(line_type = "item" AND NOT first_time_customer, group_sk, NULL)
+        format: number
+
+      - name: first_time_customers
+        title: Number of first-time customers
+        description: Number of first-time customers
+        type: count_distinct
+        sql: IF(line_type = "item" AND first_time_customer, customer_sk, NULL)
+        format: number
+
+      - name: returning_customers
+        title: Returning customer
+        description: Number of returning customers
+        type: count_distinct
+        sql: IF(line_type = "item" AND NOT first_time_customer, customer_sk, NULL)
+        format: number
+
+      - name: first_time_order_rate
+        title: First-time order rate
+        description: Number of first time customer orders as percentage of total number of orders
+        type: number
+        sql: |
+          CASE
+            WHEN {CUBE.orders} = 0 THEN NULL
+            ELSE {CUBE.first_time_customer_orders} / {CUBE.orders} * 100
+          END
+        format: percent
+
+      - name: returning_order_rate
+        title: Returning order rate
+        description: Number of returning customer orders as percentage of total number of orders
+        type: number
+        sql: |
+          CASE
+            WHEN {CUBE.orders} = 0 THEN NULL
+            ELSE {CUBE.returning_customer_orders} / {CUBE.orders} * 100
+          END
+        format: percent
+
+      - name: average_order_value
+        title: AOV
+        description: Average Order Value
+        type: number
+        sql: |
+          CASE
+            WHEN {CUBE.orders} = 0 THEN NULL
+            ELSE (SUM(gross_sales) + SUM(discounts)) / {CUBE.orders}
+          END
+        format: number
+
+      - name: gross_margin
+        title: Gross margin
+        type: number
+        sql: |
+          CASE
+            WHEN (SUM(net_sales) + SUM(shipping)) = 0 THEN NULL
+            ELSE SUM(gross_profit) / (SUM(net_sales) + SUM(shipping)) * 100
+          END
+        format: percent
+
+      - name: return_rate
+        title: Return Rate
+        description: Returns / (Gross Sales - Discounts)
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(gross_sales) + SUM(discounts) = 0 THEN NULL
+            ELSE SUM(-returns) / (SUM(gross_sales) + SUM(discounts)) * 100
+          END
+        format: number
+
+      - name: discount_rate
+        title: Discount Rate
+        description: Discounts / (Gross Sales - Discounts)
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(gross_sales) + SUM(discounts) = 0 THEN NULL
+            ELSE SUM(-discounts) / (SUM(gross_sales) + SUM(discounts)) * 100
+          END
+        format: number
+
+    pre_aggregations:

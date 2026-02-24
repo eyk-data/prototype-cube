@@ -1,0 +1,57 @@
+cubes:
+  - name: dim_customers
+    title: Customers
+    description: Customers dimension table
+    sql: SELECT * FROM { COMPILE_CONTEXT.securityContext.dataset }.dim_customers
+
+    dimensions:
+      - name: sk
+        primary_key: true
+        title: sk
+        description: Surrogate key for the customer
+        sql: sk
+        type: number
+
+      - name: eyk_customer_id
+        title: Eyk customer ID
+        description: Unique ID for the customer based on email
+        sql: eyk_customer_id
+        type: string
+
+      - name: created_at
+        title: Created timestamp
+        description: Date and time the customer was created
+        sql: created_at
+        type: string
+
+      - name: updated_at
+        title: Updated timestamp
+        description: Date and time the customer was last updated
+        sql: updated_at
+        type: string
+
+      - name: first_name
+        title: First Name
+        description: Customer first name
+        sql: first_name
+        type: string
+
+      - name: last_name
+        title: Last Name
+        description: Customer last name
+        sql: last_name
+        type: string
+
+      - name: email
+        title: Email
+        description: Customer email
+        sql: email
+        type: string
+
+      - name: customers_search_field
+        title: Search Field for Customers
+        description: Search field, combination of first name, last name and email
+        sql: customers_search_field
+        type: string
+
+    pre_aggregations:

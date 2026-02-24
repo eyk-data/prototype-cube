@@ -1,0 +1,215 @@
+cubes:
+  - name: ecommerce_attribution
+    title: E-commerce Attribution
+    description: Track 99% of conversions through Eyk attribution on first party data
+    sql: SELECT * FROM { COMPILE_CONTEXT.securityContext.dataset }.ecommerce_attribution_metrics
+
+    dimensions:
+      - name: id
+        title: id
+        sql: model || date || source || campaign_id || ad_group_id || ad_id
+        type: string
+        primary_key: true
+
+      - name: model
+        title: Attribution model
+        description: The attribution model
+        sql: model
+        type: string
+
+      - name: date
+        title: Date
+        description: The date of the results
+        sql: TIMESTAMP(date)
+        type: time
+
+      - name: source
+        title: Source
+        description: The platform where the data originates from
+        sql: source
+        type: string
+
+      - name: customer_type
+        title: First-time / Returning customer
+        description: The customer type - first-time or returning
+        sql: customer_type
+        type: string
+
+      - name: campaign_id
+        title: Campaign ID
+        sql: campaign_id
+        type: string
+
+      - name: campaign_name
+        title: Campaign name
+        sql: campaign_name
+        type: string
+
+      - name: ad_group_id
+        title: Ad group ID
+        sql: ad_group_id
+        type: string
+
+      - name: ad_group_name
+        title: Ad group name
+        sql: ad_group_name
+        type: string
+
+      - name: ad_id
+        title: Ad ID
+        sql: ad_id
+        type: string
+
+      - name: ad_name
+        title: Ad name
+        sql: ad_name
+        type: string
+
+      - name: ad_image_url
+        title: Ad Image url
+        sql: ad_image_url
+        type: string
+        format: imageUrl
+
+    measures:
+      - name: first_time_customers
+        title: First time customers
+        type: number
+        sql: CEILING(SUM(first_time_customers))
+        format: number
+
+      - name: orders
+        title: Orders
+        type: number
+        sql: CEILING(SUM(orders))
+        format: number
+
+      - name: gross_sales
+        title: Gross sales
+        type: sum
+        sql: gross_sales
+        format: number
+
+      - name: total_sales
+        title: Total sales
+        type: sum
+        sql: total_sales
+        format: number
+
+      - name: discounts
+        title: Discounts
+        type: sum
+        sql: ABS(discounts)
+        format: number
+
+      - name: returns
+        title: Returns
+        type: sum
+        sql: ABS(returns)
+        format: number
+
+      - name: gross_profit
+        title: Gross profit
+        type: sum
+        sql: gross_profit
+        format: number
+
+      - name: contribution_profit
+        title: Contribution profit
+        type: sum
+        sql: contribution_profit
+        format: number
+
+      - name: reported_conversions
+        title: Reported conversions
+        type: sum
+        sql: reported_conversions
+        format: number
+
+      - name: reported_revenue
+        title: Reported revenue
+        type: sum
+        sql: reported_revenue
+        format: number
+
+      - name: spend
+        title: Spend
+        type: sum
+        sql: spend
+        format: number
+
+      - name: impressions
+        title: Impressions
+        type: sum
+        sql: impressions
+        format: number
+
+      - name: clicks
+        title: Clicks
+        type: sum
+        sql: clicks
+        format: number
+
+      # CALCULATED METRICS
+
+      - name: average_order_value
+        title: AOV
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(orders) = 0 THEN NULL
+            ELSE (SUM(gross_sales) + SUM(discounts)) / SUM(orders)
+          END
+        format: number
+
+      - name: eyk_return_on_ad_spend
+        title: Eyk ROAS
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(spend) = 0 THEN NULL
+            ELSE (SUM(gross_sales) + SUM(discounts)) / SUM(spend)
+          END
+        format: number
+
+      - name: reported_return_on_ad_spend
+        title: Reported ROAS
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(spend) = 0 THEN NULL
+            ELSE SUM(reported_revenue) / SUM(spend)
+          END
+        format: number
+
+      - name: cost_per_acquisition
+        title: CPA
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(first_time_customers) = 0 THEN NULL
+            ELSE SUM(spend) / SUM(first_time_customers)
+          END
+        format: number
+
+      - name: gross_margin
+        title: Gross margin
+        type: number
+        sql: |
+          CASE
+            WHEN (SUM(net_sales) + SUM(shipping)) = 0 THEN NULL
+            ELSE SUM(gross_profit) / (SUM(net_sales) + SUM(shipping)) * 100
+          END
+        format: percent
+
+      - name: contribution_margin
+        title: Contribution margin
+        type: number
+        sql: |
+          CASE
+            WHEN (SUM(net_sales) + SUM(shipping)) = 0 THEN NULL
+            ELSE SUM(contribution_profit) / (SUM(net_sales) + SUM(shipping)) * 100
+          END
+        format: percent
+
+    pre_aggregations:

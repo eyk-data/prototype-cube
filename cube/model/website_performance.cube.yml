@@ -1,0 +1,101 @@
+cubes:
+  - name: website_performance
+    title: Website performance
+    description: The website performance model gives an overview of the performance metrics of your website
+    sql_table: "{ COMPILE_CONTEXT.securityContext.dataset }.website_performance_overview"
+    data_source: default
+
+    joins: []
+
+    dimensions:
+      - name: source
+        title: Source
+        description: The source where the data originates from
+        sql: source
+        type: string
+
+      - name: date
+        title: Date
+        description: The date of the results
+        sql: TIMESTAMP(date)
+        type: time
+
+    measures:
+      - name: total_users
+        title: Total users
+        description: The number of users
+        type: sum
+        sql: total_users
+        format: number
+
+      - name: new_users
+        title: New users
+        description: The number of new users
+        type: sum
+        sql: new_users
+        format: number
+
+      - name: sessions
+        title: Sessions
+        description: The number of sessions
+        type: sum
+        sql: sessions
+        format: number
+
+      - name: engaged_sessions
+        title: Engaged sessions
+        description: The number of engaged sessions
+        type: sum
+        sql: engaged_sessions
+        format: number
+
+      - name: conversions
+        title: Conversions
+        description: The number of conversions
+        type: sum
+        sql: conversions
+        format: number
+
+      - name: pageviews
+        title: Pageviews
+        description: The number of pageviews
+        type: sum
+        sql: page_views
+        format: number
+
+      - name: engagement_rate
+        title: Engagement rate
+        description: The percentage of engaged sessions
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(sessions) = 0 THEN NULL
+            ELSE (SUM(engaged_sessions) / SUM(sessions)) * 100
+          END
+        format: percent
+
+      - name: bounce_rate
+        title: Bounce rate
+        description: The percentage of sessions that were not engaged
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(sessions) = 0 THEN NULL
+            ELSE ((SUM(sessions) - SUM(engaged_sessions)) / SUM(sessions)) * 100
+          END
+        format: percent
+
+      - name: conversion_rate
+        title: Conversion rate
+        description: The percentage of sessions that resulted in a conversion
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(sessions) = 0 THEN NULL
+            ELSE (SUM(conversions) / SUM(sessions)) * 100
+          END
+        format: percent
+
+    pre_aggregations:
+      # Pre-aggregation definitions go here.
+      # Learn more in the documentation: https://cube.dev/docs/caching/pre-aggregations/getting-started

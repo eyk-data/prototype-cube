@@ -1,0 +1,142 @@
+cubes:
+  - name: online_store_performance
+    title: Online store performance
+    description: The Online store performance overview model aggregates and analyzes ecommerce data to unlock insights into sales trends, customer engagement, and product performance, driving strategic decision-making.
+    sql: SELECT * FROM { COMPILE_CONTEXT.securityContext.dataset }.online_store_performance
+
+    dimensions:
+      - name: source
+        title: Source
+        description: The platform where the data originates from
+        sql: source
+        type: string
+
+      - name: order_date
+        title: Order date
+        description: The date of the results
+        sql: TIMESTAMP(date)
+        type: time
+
+      - name: store
+        title: Store
+        description: The store where the order has been made
+        sql: store_name
+        type: string
+
+      - name: source_store
+        title: Source - store
+        description: The source and store where the order has been made
+        sql: CONCAT(source, ' - ', store_name)
+        type: string
+
+      - name: customer_type
+        title: First-time / Returning customer
+        description: The customer type - first-time or returning
+        sql: customer_type
+        type: string
+
+    measures:
+      - name: orders
+        title: Orders
+        description: Number of orders
+        type: sum
+        sql: orders
+        format: number
+
+      - name: invoices
+        title: Invoices
+        description: Number of invoices
+        type: sum
+        sql: invoices
+        format: number
+
+      - name: net_quantity
+        title: Net quantity
+        description: Number of items ordered minus number of returned items
+        type: sum
+        sql: net_quantity
+        format: number
+
+      - name: gross_sales
+        title: Gross sales
+        description: The total gross sales (product price x quantity - before taxes, shipping, discounts, and returns)
+        type: sum
+        sql: gross_sales
+        format: number
+
+      - name: discounts
+        title: Discounts
+        description: The total amount of discount given
+        type: sum
+        sql: ABS(discounts)
+        format: number
+
+      - name: returns
+        title: Returns
+        description: The total amount of returned revenue
+        type: sum
+        sql: ABS(returns)
+        format: number
+
+      - name: net_sales
+        title: Net sales
+        description: Net sales is calculated as gross sales - discounts - returns
+        type: sum
+        sql: net_sales
+        format: number
+
+      - name: shipping
+        title: Shipping
+        description: The total amount of shipping costs
+        type: sum
+        sql: shipping
+        format: number
+
+      - name: taxes
+        title: Taxes
+        description: The total tax amount
+        type: sum
+        sql: taxes
+        format: number
+
+      - name: total_sales
+        title: Total sales
+        description: 	Total sales equates to gross sales - discounts - returns + taxes + duties + shipping charges + fees
+        type: sum
+        sql: total_sales
+        format: number
+
+      - name: average_order_value
+        title: AOV
+        description: Average Order Value
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(orders) = 0 THEN NULL
+            ELSE (SUM(gross_sales) + SUM(discounts)) / SUM(orders)
+          END
+        format: number
+
+      - name: first_time_order_rate
+        title: First-time order rate
+        description: Number of first time customer orders as percentage of total number of orders
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(orders) = 0 THEN NULL
+            ELSE SUM(IF(customer_type = 'First-time', orders, 0)) / SUM(orders) * 100
+          END
+        format: percent
+
+      - name: returning_order_rate
+        title: Returning order rate
+        description: Number of returning customer orders as percentage of total number of orders
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(orders) = 0 THEN NULL
+            ELSE SUM(IF(customer_type = 'Returning', orders, 0)) / SUM(orders) * 100
+          END
+        format: percent
+
+    pre_aggregations:

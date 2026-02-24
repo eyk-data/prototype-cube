@@ -1,0 +1,678 @@
+cubes:
+  - name: fact_attributions
+    title: Attributed sales items
+    description: Item level table of attribution metrics
+    sql: SELECT * FROM { COMPILE_CONTEXT.securityContext.dataset }.fact_attributions
+
+    joins:
+      - name: dim_product_variants
+        sql: "{CUBE}.variant_sk = {dim_product_variants}.sk"
+        relationship: many_to_one
+
+      - name: dim_customers
+        sql: "{CUBE}.customer_sk = {dim_customers}.sk"
+        relationship: many_to_one
+
+      - name: dim_attribution_models
+        sql: "{CUBE}.attribution_model_sk = {dim_attribution_models}.sk"
+        relationship: many_to_one
+
+      - name: fact_daily_ads
+        sql: "{CUBE}.ad_sk = {fact_daily_ads}.ad_sk"
+        relationship: many_to_one
+
+    dimensions:
+
+      # Surrogate keys
+
+      - name: attribution_sk
+        title: Attribution SK
+        primary_key: true
+        shown: true
+        description: Attribution Surrogate Key
+        sql: attribution_sk
+        type: number
+
+      - name: attribution_model_sk
+        title: Attribution Model SK
+        description: Attribution Model Surrogate Key
+        sql: attribution_model_sk
+        type: number
+
+      - name: ad_sk
+        title: Daily Ad SK
+        description: Daily Ad Surrogate Key
+        sql: ad_sk
+        type: number
+
+      - name: line_sk
+        title: Line SK
+        description: Line Item Surrogate Key
+        sql: line_sk
+        type: number
+
+      - name: group_sk
+        title: Group SK
+        description: Group Surrogate Key
+        sql: group_sk
+        type: number
+
+      - name: customer_sk
+        title: Customer SK
+        description: Customer Surrogate Key
+        sql: customer_sk
+        type: number
+
+      - name: variant_sk
+        title: Variant SK
+        description: Variant Surrogate Key
+        sql: variant_sk
+        type: number
+
+      # Attribution dimensions
+
+      - name: attribution_type
+        title: Attribution Type
+        description: "Attribution type: order-level or modelled"
+        sql: attribution_type
+        type: string
+
+      - name: attribution_model
+        title: Attribution Model
+        description: Attribution Model
+        sql: attribution_model
+        type: string
+
+      - name: attribution_id
+        title: Attribution Id
+        description: Attribution Id
+        sql: attribution_id
+        type: string
+
+      - name: user_id
+        title: User Id
+        description: User Id
+        sql: user_id
+        type: string
+
+      - name: eyk_session_id
+        title: Eyk Session Id
+        description: Eyk Session Id
+        sql: eyk_session_id
+        type: string
+
+      - name: purchase_journey_id
+        title: Purchase Journey Id
+        description: Purchase Journey Id
+        sql: purchase_journey_id
+        type: string
+
+      - name: combined_timestamp
+        title: Combined Timestamp
+        description: Combined Timestamp
+        sql: combined_timestamp
+        type: time
+
+      - name: combined_source
+        title: Channel
+        description: Combined Source
+        sql: LEFT(combined_source, 45)
+        type: string
+
+      - name: combined_campaign
+        title: Campaign
+        description: Combined Campaign
+        sql: LEFT(combined_campaign, 45)
+        type: string
+
+      - name: combined_ad_group
+        title: Ad Group
+        description: Combined Ad Group
+        sql: LEFT(combined_ad_group, 45)
+        type: string
+
+      - name: combined_ad
+        title: Ad
+        description: Combined Ad
+        sql: LEFT(combined_ad, 45)
+        type: string
+
+      - name: measurement_source
+        title: Measurement Source
+        description: Measurement Source
+        sql: measurement_source
+        type: string
+
+      - name: measurement_campaign
+        title: Measurement Campaign
+        description: Measurement Campaign
+        sql: measurement_campaign
+        type: string
+
+      - name: measurement_id
+        title: Measurement Id
+        description: Measurement Id
+        sql: measurement_id
+        type: string
+
+      - name: is_attributed
+        title: Is Attributed
+        description: Is Attributed
+        sql: is_attributed
+        type: boolean
+
+      - name: is_unmeasured_order
+        title: Is Unmeasured Order
+        description: Whether this is an unmeasured order (Data-Driven attribution)
+        sql: is_unmeasured_order
+        type: boolean
+
+      # Ad dimensions
+
+      - name: channel_source
+        title: Channel Source
+        description: Channel Source
+        sql: channel_source
+        type: string
+
+      - name: channel_account_name
+        title: Channel Account Name
+        description: Channel Account Name
+        sql: channel_account_name
+        type: string
+
+      - name: channel_currency
+        title: Channel Currency
+        description: Channel Currency
+        sql: channel_currency
+        type: string
+
+      # Revenue dimensions
+
+      - name: revenue_source
+        title: Revenue Source
+        description: The ecommerce platform where the data originates from
+        sql: revenue_source
+        type: string
+
+      - name: store
+        title: Store
+        description: The store where the order has been made
+        sql: store_name
+        type: string
+
+      - name: source_store
+        title: Source - store
+        description: The source and store where the order has been made
+        sql: CONCAT(source, ' - ', store_name)
+        type: string
+
+      - name: sales_channel
+        title: Sales Channel
+        description: The sales channel where the order has been made
+        sql: sales_channel
+        type: string
+
+      - name: line_id
+        title: Line ID
+        description: Unique identifier for the sales line item
+        sql: line_id
+        type: string
+
+      - name: line_type
+        title: Line Type
+        description: Type of the sales line item
+        sql: line_type
+        type: string
+
+      - name: line_timestamp
+        title: Line Timestamp
+        description: Timestamp of the sales line item
+        sql: line_timestamp
+        type: time
+
+      - name: line_status
+        title: Line Status
+        description: Status of the sales line item
+        sql: line_status
+        type: string
+
+      - name: group_id
+        title: Group ID
+        description: Group identifier for the order
+        sql: group_id
+        type: string
+
+      - name: group_type
+        title: Group Type
+        description: Type of the order group
+        sql: group_type
+        type: string
+
+      - name: group_status
+        title: Group Status
+        description: Status of the order group
+        sql: group_status
+        type: string
+
+      - name: group_timestamp
+        title: Group Timestamp
+        description: Timestamp of the order group
+        sql: group_timestamp
+        type: time
+
+      - name: group_uri
+        title: Group URI
+        description: URI identifier for the order group
+        sql: group_uri
+        type: string
+
+      - name: group_uri_aliases
+        title: Group URI Aliases
+        description: Alternative URI identifiers for the order group
+        sql: ARRAY_TO_STRING(group_uri_aliases, ", ")
+        type: string
+
+      - name: order_meta_data
+        title: Order Meta Data
+        description: Meta data for the order
+        sql: ARRAY_TO_STRING(meta_data, ", ")
+        type: string
+
+      - name: first_time_customer
+        title: First Time Customer
+        description: Whether this is a first-time customer
+        sql: first_time_customer
+        type: boolean
+
+      - name: first_subscription_group
+        title: First Subscription Group
+        description: Whether this is the first subscription group
+        sql: first_subscription_group
+        type: boolean
+
+      - name: billing_country_code
+        title: Billing Country
+        description: Country code from billing address
+        sql: billing_country_code
+        type: string
+
+      - name: shipping_country_code
+        title: Shipping Country
+        description: Country code from shipping address
+        sql: shipping_country_code
+        type: string
+
+      - name: customer_id
+        title: Customer ID
+        description: Customer identifier from the source system
+        sql: customer_id
+        type: string
+
+      - name: eyk_customer_id
+        title: EYK Customer ID
+        description: Internal customer identifier
+        sql: eyk_customer_id
+        type: string
+
+      - name: customer_sk
+        title: Customer SK
+        description: Customer surrogate key
+        sql: customer_sk
+        type: number
+
+      - name: product_id
+        title: Product ID
+        description: Product identifier
+        sql: product_id
+        type: string
+
+      - name: variant_id
+        title: Variant ID
+        description: Product variant identifier
+        sql: variant_id
+        type: string
+
+      - name: variant_sk
+        title: Variant SK
+        description: Product variant surrogate key
+        sql: variant_sk
+        type: number
+
+      - name: orders_search_field
+        title: Search Field for Orders
+        description: Search field, combination of order id and customer search field
+        sql: orders_search_field
+        type: string
+
+    measures:
+
+      # Counts needed for pagination
+
+      - name: count_channel
+        title: Count channels
+        description: Total number of distinct channels
+        type: count_distinct
+        sql: combined_source
+        format: number
+
+      - name: count_campaigns
+        title: Count campaigns
+        description: Total number of distinct campaigns
+        type: count_distinct
+        sql: COALESCE({fact_daily_ads.campaign_name}, measurement_campaign)
+        format: number
+
+      - name: count_ad_groups
+        title: Count ad groups
+        description: Total number of distinct ad groups
+        type: count_distinct
+        sql: "{fact_daily_ads.ad_group_name}"
+        format: number
+
+      - name: count_ads
+        title: Count ads
+        description: Total number of distinct ads
+        type: count_distinct
+        sql: COALESCE({fact_daily_ads.ad_name}, measurement_id)
+        format: number
+
+      # Weights
+
+      - name: line_weight
+        title: Line Weight
+        description: Line Weight
+        type: sum
+        sql: line_weight
+        format: number
+
+      # Ad Metrics (from joined fact_daily_ads - auto-deduplicated via many_to_one)
+
+      - name: channel_impressions
+        title: Impressions
+        description: Total ad impressions (deduplicated via join)
+        type: number
+        sql: "{fact_daily_ads.impressions}"
+        format: number
+
+      - name: channel_clicks
+        title: Clicks
+        description: Total ad clicks (deduplicated via join)
+        type: number
+        sql: "{fact_daily_ads.clicks}"
+        format: number
+
+      - name: channel_cost
+        title: Channel Spend
+        description: Total ad spend (deduplicated via join)
+        type: number
+        sql: "{fact_daily_ads.cost}"
+        format: currency
+
+      - name: channel_revenue
+        title: Channel Revenue
+        description: Revenue as reported by ad platforms (deduplicated via join)
+        type: number
+        sql: "{fact_daily_ads.revenue}"
+        format: currency
+
+      - name: channel_orders
+        title: Channel Orders
+        description: Orders as reported by ad platforms (deduplicated via join)
+        type: number
+        sql: "{fact_daily_ads.orders}"
+        format: number
+
+      # Revenue metrics
+
+      - name: net_quantity
+        title: Net quantity
+        description: Number of items ordered minus number of returned items
+        type: sum
+        sql: net_quantity
+        format: number
+
+      - name: gross_sales
+        title: Gross sales
+        description: The total gross sales (product price x quantity - before taxes, shipping, discounts, and returns)
+        type: sum
+        sql: gross_sales
+        format: number
+
+      - name: discounts
+        title: Discounts
+        description: The total amount of discount given
+        type: sum
+        sql: -discounts
+        format: number
+
+      - name: returns
+        title: Returns
+        description: The total amount of returned revenue
+        type: sum
+        sql: -returns
+        format: number
+
+      - name: net_sales
+        title: Net sales
+        description: Net sales is calculated as gross sales - discounts - returns
+        type: sum
+        sql: net_sales
+        format: number
+
+      - name: shipping
+        title: Shipping
+        description: The total amount of shipping costs
+        type: sum
+        sql: shipping
+        format: number
+
+      - name: taxes
+        title: Taxes
+        description: The total tax amount
+        type: sum
+        sql: taxes
+        format: number
+
+      - name: total_sales
+        title: Total sales
+        description: Total sales equates to gross sales - discounts - returns + taxes + duties + shipping charges + fees
+        type: sum
+        sql: total_sales
+        format: number
+
+      - name: product_cost
+        title: Product cost
+        description: Cost of the product
+        type: sum
+        sql: "{CUBE}.product_cost"
+        format: number
+
+      - name: product_cost_fallback
+        title: Product cost fallback
+        description: Fallback cost of the product
+        type: sum
+        sql: product_cost_fallback
+        format: number
+
+      - name: product_cost_combined
+        title: Combined product cost
+        description: Product cost used in profit calculation, combination of Product cost and Product cost fallback
+        type: sum
+        sql: "COALESCE({CUBE}.product_cost, product_cost_fallback)"
+        format: number
+
+      - name: payment_cost
+        title: Payment cost
+        description: Cost of payment processing
+        type: sum
+        sql: payment_cost
+        format: number
+
+      - name: packaging_cost
+        title: Packaging cost
+        description: Cost of packaging
+        type: sum
+        sql: packaging_cost
+        format: number
+
+      - name: shipping_cost
+        title: Shipping cost
+        description: Cost of shipping
+        type: sum
+        sql: shipping_cost
+        format: number
+
+      - name: gross_profit
+        title: Gross profit
+        description: Gross profit calculated as net sales - total costs
+        type: sum
+        sql: gross_profit
+        format: number
+
+      - name: contribution_profit
+        title: Contribution profit
+        description: Gross profit minus ad spend (ad cost deduplicated via join)
+        type: number
+        sql: SUM(gross_profit) - COALESCE({fact_daily_ads.cost}, 0)
+        format: number
+
+      # CALCULATED METRICS
+
+      - name: orders
+        title: Orders
+        description: Number of orders
+        type: sum
+        sql: order_additive_weight
+        format: number
+
+      - name: first_time_customer_orders
+        title: First-time customer orders
+        description: Number of orders from first-time customers
+        type: sum
+        sql: first_time_customer_additive_weight
+        format: number
+
+      - name: returning_customer_orders
+        title: Returning customer orders
+        description: Number of orders from returning customers
+        type: number
+        sql: "{CUBE.orders} - {CUBE.first_time_customer_orders}"
+        format: number
+
+      - name: first_time_customers
+        title: First-time customers
+        description: Number of first-time customers
+        type: sum
+        sql: first_time_customer_additive_weight
+        format: number
+
+      - name: first_time_order_rate
+        title: First-time order rate
+        description: Number of first time customer orders as percentage of total number of orders
+        type: number
+        sql: |
+          CASE
+            WHEN {CUBE.orders} = 0 THEN NULL
+            ELSE {CUBE.first_time_customer_orders} / {CUBE.orders} * 100
+          END
+        format: percent
+
+      - name: returning_order_rate
+        title: Returning order rate
+        description: Number of returning customer orders as percentage of total number of orders
+        type: number
+        sql: |
+          CASE
+            WHEN {CUBE.orders} = 0 THEN NULL
+            ELSE {CUBE.returning_customer_orders} / {CUBE.orders} * 100
+          END
+        format: percent
+
+      - name: average_order_value
+        title: AOV
+        description: Average Order Value
+        type: number
+        sql: |
+          CASE
+            WHEN {CUBE.orders} = 0 THEN NULL
+            ELSE (SUM(gross_sales) + SUM(discounts)) / {CUBE.orders}
+          END
+        format: number
+
+      - name: gross_margin
+        title: Gross margin
+        type: number
+        sql: |
+          CASE
+            WHEN (SUM(net_sales) + SUM(shipping)) = 0 THEN NULL
+            ELSE SUM(gross_profit) / (SUM(net_sales) + SUM(shipping)) * 100
+          END
+        format: percent
+
+      - name: contribution_margin
+        title: Contribution margin
+        type: number
+        sql: |
+          CASE
+            WHEN (SUM(net_sales) + SUM(shipping)) = 0 THEN NULL
+            ELSE {CUBE.contribution_profit} / (SUM(net_sales) + SUM(shipping)) * 100
+          END
+        format: percent
+
+      - name: return_rate
+        title: Return Rate
+        description: Returns / (Gross Sales - Discounts)
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(gross_sales) + SUM(discounts) = 0 THEN NULL
+            ELSE SUM(-returns) / (SUM(gross_sales) + SUM(discounts)) * 100
+          END
+        format: number
+
+      - name: discount_rate
+        title: Discount Rate
+        description: Discounts / (Gross Sales - Discounts)
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(gross_sales) + SUM(discounts) = 0 THEN NULL
+            ELSE SUM(-discounts) / (SUM(gross_sales) + SUM(discounts)) * 100
+          END
+        format: number
+
+      - name: eyk_return_on_ad_spend
+        title: Eyk ROAS
+        description: (Gross Sales - Discounts) / Channel Spend
+        type: number
+        sql: |
+          CASE
+            WHEN {fact_daily_ads.cost} = 0 THEN NULL
+            ELSE (SUM(gross_sales) + SUM(discounts)) / {fact_daily_ads.cost}
+          END
+        format: number
+
+      - name: channel_return_on_ad_spend
+        title: Channel ROAS
+        description: Reported Revenue / Channel Spend
+        type: number
+        sql: |
+          CASE
+            WHEN {fact_daily_ads.cost} = 0 THEN NULL
+            ELSE {fact_daily_ads.revenue} / {fact_daily_ads.cost}
+          END
+        format: number
+
+      - name: cost_per_acquisition
+        title: CPA
+        description: Channel Spend / First-time customer orders
+        type: number
+        sql: |
+          CASE
+            WHEN {CUBE.first_time_customer_orders} = 0 THEN NULL
+            ELSE {fact_daily_ads.cost} / {CUBE.first_time_customer_orders}
+          END
+        format: number
+
+    pre_aggregations:
