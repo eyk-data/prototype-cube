@@ -297,8 +297,16 @@ async def planner_node(state: AgentState) -> dict:
     llm = _get_llm()
     cube_meta_context = await get_cube_meta_context()
 
-    # Detect first call vs revision
-    is_first_call = state.get("report_plan") is None and state.get("revision_count", 0) == 0
+    # Detect whether the reviewer sent us back for revision (the only case
+    # where we should NOT reset per-turn state).  Every other entry into the
+    # planner — first message, follow-up message, max-revisions exceeded —
+    # is a fresh turn that needs a clean slate.
+    review_result_data = state.get("review_result")
+    is_revision = (
+        review_result_data is not None
+        and not review_result_data.get("approved", True)
+        and 0 < state.get("revision_count", 0) < MAX_REVISIONS
+    )
 
     question = _get_user_question(state)
 
@@ -432,7 +440,7 @@ async def planner_node(state: AgentState) -> dict:
             "messages": [AIMessage(content=ai_text)],
             "specialist_domain": "marketing",
         }
-        if is_first_call:
+        if not is_revision:
             result.update(_reset_turn_state())
             result["analytics_report"] = report.model_dump()
         return result
@@ -489,7 +497,7 @@ async def planner_node(state: AgentState) -> dict:
             "messages": [AIMessage(content=ai_text)],
             "specialist_domain": plan.domain,
         }
-        if is_first_call:
+        if not is_revision:
             result.update(_reset_turn_state())
             result["analytics_report"] = report.model_dump()
         return result
@@ -502,8 +510,9 @@ async def planner_node(state: AgentState) -> dict:
         "executed_blocks": [],
         "current_block_index": 0,
         "specialist_domain": plan.domain,
+        "analytics_report": None,  # Clear stale report from previous turn
     }
-    if is_first_call:
+    if not is_revision:
         result.update(_reset_turn_state())
         result["report_plan"] = plan.model_dump()
         result["thought_log"] = [routing_thought, thought]
