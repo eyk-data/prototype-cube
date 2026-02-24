@@ -1,9 +1,6 @@
 import os
-import jwt
-import json
 import uuid
-import random
-import asyncio
+import jwt
 from typing import Optional, List
 from contextlib import asynccontextmanager
 from enum import Enum
@@ -23,6 +20,8 @@ from sqlmodel import (
     Column,
     JSON,
 )
+
+from app.agent.streaming import langgraph_to_datastream
 
 
 CUBE_API_SECRET = os.environ.get("CUBE_API_SECRET") or os.environ.get("CUBEJS_API_SECRET", "apisecret")
@@ -215,50 +214,14 @@ def get_cube_token(dataset: Optional[str] = None) -> str:
 # Streaming chat endpoint (Vercel AI SDK UI Message Stream Protocol v1)
 # ---------------------------------------------------------------------------
 
-MOCK_THINKING = [
-    "Let me analyze what you're asking about. I need to consider the data sources available and determine the best approach to answer your question.",
-    "Thinking through this step by step. First, I'll look at the relevant metrics, then consider how they relate to your question.",
-    "Processing your request. I'm reviewing the available data models to find the most relevant information for you.",
-    "Let me reason about this carefully. I want to make sure I provide accurate and useful information based on the data we have.",
-]
-
-MOCK_RESPONSES = [
-    "Based on the available data, here's what I found:\n\n**Key Metrics Summary**\n- Total impressions: 125,430\n- Click-through rate: 3.2%\n- Conversion rate: 1.8%\n\nThe paid performance campaigns are showing steady growth over the last quarter. The top-performing campaign is *Summer Sale 2024* with a ROAS of 4.2x.\n\nWould you like me to drill deeper into any specific campaign or metric?",
-    "Here's an overview of the ecommerce attribution data:\n\n**Attribution by Channel**\n| Channel | Revenue | Spend | ROAS |\n|---------|---------|-------|------|\n| Google Ads | $45,200 | $12,000 | 3.8x |\n| Meta Ads | $32,100 | $9,500 | 3.4x |\n| Email | $28,700 | $2,100 | 13.7x |\n\nEmail continues to deliver the highest return on ad spend, though paid channels drive significantly more total revenue.\n\nLet me know if you'd like to explore a specific channel in more detail.",
-    "Great question! Let me break down the performance trends:\n\n1. **Traffic Sources**: Organic search accounts for 42% of total sessions, followed by paid search at 28%\n2. **Top Campaigns**: The brand awareness campaign saw a 15% increase in impressions this month\n3. **Conversion Funnel**: Cart abandonment rate decreased from 72% to 68% after the checkout optimization\n\nThe overall trend is positive. Shall I generate a more detailed report on any of these areas?",
-    "I've looked into the subscription performance data:\n\n**Monthly Recurring Revenue (MRR)**\n- Current MRR: $89,400\n- MRR Growth: +6.2% month-over-month\n- Churn Rate: 2.1%\n- Net Revenue Retention: 112%\n\nThe cohort analysis shows that customers acquired through referral programs have a 35% higher lifetime value compared to those from paid channels.\n\nWould you like me to analyze a specific cohort or time period?",
-]
-
-
-async def _chat_stream(messages: list):
-    """Generator that yields Vercel AI SDK data stream protocol lines.
-
-    Format: each line is ``<type_prefix>:<json_value>\\n``
-    Type prefixes:
-      0  = text delta
-      e  = finish (with reason + usage)
-      d  = done
-    """
-    thinking = random.choice(MOCK_THINKING)
-    response = random.choice(MOCK_RESPONSES)
-
-    # Stream the text response word by word
-    for word in response.split(" "):
-        yield f'0:{json.dumps(word + " ")}\n'
-        await asyncio.sleep(random.uniform(0.03, 0.08))
-
-    # finish event
-    yield f'e:{json.dumps({"finishReason": "stop", "usage": {"promptTokens": 42, "completionTokens": 128}})}\n'
-    # done
-    yield f'd:{json.dumps({"finishReason": "stop", "usage": {"promptTokens": 42, "completionTokens": 128}})}\n'
-
 
 @app.post("/api/chat")
 async def chat(request: Request):
     body = await request.json()
     messages = body.get("messages", [])
+    thread_id = body.get("thread_id") or str(uuid.uuid4())
     return StreamingResponse(
-        _chat_stream(messages),
+        langgraph_to_datastream(messages, thread_id),
         media_type="text/plain; charset=utf-8",
         headers={
             "x-vercel-ai-data-stream": "v1",
