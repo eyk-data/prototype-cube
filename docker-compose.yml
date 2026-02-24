@@ -32,9 +32,9 @@ services:
     volumes:
       - ./webapp/public:/app/public
       - ./webapp/src:/app/src
+      - ./webapp/tailwind.config.js:/app/tailwind.config.js
+      - ./webapp/postcss.config.js:/app/postcss.config.js
     environment:
       - PORT=3001
-      - REACT_APP_CUBE_API_URL=http://localhost:4000/cubejs-api/v1
-      - REACT_APP_USE_SELF_HOSTED_CUBE=true
       - REACT_APP_SERVER_URL=http://localhost:8000
     restart: on-failure
