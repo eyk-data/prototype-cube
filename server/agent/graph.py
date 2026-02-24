@@ -22,9 +22,15 @@ from .cube_meta import get_cube_meta_context
 from .models import (
     AnalyticsReport,
     BarChartBlock,
+    BlockPlan,
+    BlockQuerySpec,
     CubeQuery,
-    FormatterDecision,
+    CubeFilter,
+    CubeTimeDimension,
+    ExecutedBlock,
     LineChartBlock,
+    ReportPlan,
+    ReviewResult,
     TableBlock,
     TextBlock,
     ThoughtBlock,
@@ -33,7 +39,7 @@ from .models import (
 from .specialists import SPECIALISTS
 from .tools import cube_builder_tool
 
-MAX_RETRIES = 2
+MAX_REVISIONS = 2
 
 
 # ---------------------------------------------------------------------------
@@ -43,10 +49,16 @@ MAX_RETRIES = 2
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     specialist_domain: Optional[str]
-    cube_query: Optional[dict]
-    cube_result: Optional[dict]
-    cube_error: Optional[str]
-    retry_count: int
+    # Planning
+    report_plan: Optional[dict]
+    # Block execution (loop)
+    executed_blocks: list[dict]
+    current_block_index: int
+    block_errors: list[str]
+    # Review
+    review_result: Optional[dict]
+    revision_count: int
+    # Carry-forward
     thought_log: list[str]
     analytics_report: Optional[dict]
 
@@ -78,6 +90,31 @@ def _get_llm() -> BaseChatModel:
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _build_cube_query_from_spec(spec: BlockQuerySpec) -> dict | None:
+    """Convert a BlockQuerySpec into a validated CubeQuery dict using the cube_builder_tool."""
+    result = cube_builder_tool.invoke({
+        "measures": spec.measures,
+        "dimensions": spec.dimensions,
+        "time_dimensions": spec.time_dimensions,
+        "filters": spec.filters,
+        "order": spec.order,
+        "limit": spec.limit,
+    })
+    if result.get("status") == "ok":
+        return result["query"]
+    return None
+
+
+def _get_user_question(state: AgentState) -> str:
+    """Extract the latest user question from messages."""
+    user_messages = [m for m in state["messages"] if isinstance(m, HumanMessage)]
+    return user_messages[-1].content if user_messages else ""
+
+
+# ---------------------------------------------------------------------------
 # Nodes
 # ---------------------------------------------------------------------------
 
@@ -97,10 +134,6 @@ async def router_node(state: AgentState) -> dict:
             "If unsure, default to 'marketing'."
         )
     )
-    # Follow-up questions like "What about last month?" are ambiguous without prior
-    # context. Passing recent messages lets the router infer the domain from the
-    # ongoing conversation. A window of 6 messages (~3 turns) keeps the prompt
-    # small while providing enough context.
     recent_messages = state["messages"][-6:]
 
     response = await llm.ainvoke([system] + recent_messages)
@@ -111,141 +144,309 @@ async def router_node(state: AgentState) -> dict:
     thought = f"Analyzing your question — routing to the {domain} analytics specialist."
     return {
         "specialist_domain": domain,
-        # Per-turn scratch fields (query, result, error, report) persist in the
-        # checkpoint between turns and must be reset at the start of each new turn
-        # to avoid stale data from the previous turn leaking into the pipeline.
-        "cube_query": None,
-        "cube_result": None,
-        "cube_error": None,
+        # Reset per-turn state
+        "report_plan": None,
+        "executed_blocks": [],
+        "current_block_index": 0,
+        "block_errors": [],
+        "review_result": None,
+        "revision_count": 0,
         "analytics_report": None,
-        "retry_count": 0,
         "thought_log": [thought],
     }
 
 
-async def specialist_node(state: AgentState) -> dict:
-    """Use the specialist LLM + tool to build a CubeQuery."""
-    config = SPECIALISTS[state["specialist_domain"]]
+async def planner_node(state: AgentState) -> dict:
+    """Plan a multi-block analytics report using structured output."""
     llm = _get_llm()
-    llm_with_tools = llm.bind_tools([cube_builder_tool])
-
+    config = SPECIALISTS[state["specialist_domain"]]
     cube_meta_context = await get_cube_meta_context()
+
+    question = _get_user_question(state)
+
     system_parts = [
+        "You are an analytics report planner. Your job is to design a structured report "
+        "that best answers the user's question with appropriate data visualizations.\n\n",
+
+        "## Domain Expertise\n",
         config.system_instructions,
         "\n\n",
+
+        "## Available Block Types\n"
+        "- **text**: A narrative paragraph explaining insights. Use for introductions, "
+        "summaries, and contextual explanations. No query needed.\n"
+        "- **chart_line**: A line chart for trends over time. REQUIRES a time dimension "
+        "with granularity in the query. Set x_or_category_key to the time dimension "
+        "(e.g. 'fact_daily_ads.date.day') and y_or_value_key to the measure.\n"
+        "- **chart_bar**: A bar chart for categorical comparisons. Best for comparing "
+        "a few groups. Set x_or_category_key to the category dimension and y_or_value_key "
+        "to the measure.\n"
+        "- **table**: A data table for detailed numbers. Set columns to the list of "
+        "member names to display. Good for showing exact values.\n\n",
+
+        "## Data Storytelling Principles\n"
+        "1. Lead with the key insight (text block)\n"
+        "2. Support with the most impactful visualization\n"
+        "3. Add detail with supplementary visuals or tables\n"
+        "4. Conclude with context or recommendations if appropriate\n\n",
+
+        "## Query Construction for Each Block\n"
+        "- Each block gets its OWN optimized query — do NOT try to reuse one query for all blocks.\n"
+        "- Line charts MUST include granularity in time_dimensions (day/week/month).\n"
+        "- Bar charts should limit to a reasonable number of categories (5-10 max).\n"
+        "- Tables can show more columns and rows than charts.\n"
+        "- Text blocks don't need query_spec (set to null).\n"
+        "- For text blocks, set text_guidance describing what to write about.\n\n",
+
+        "## Cube Metadata\n",
         cube_meta_context,
     ]
 
-    # If retrying after a cube error, include the error for self-correction
-    cube_error = state.get("cube_error")
-    if cube_error:
+    # If revising after review, include the feedback
+    review_result = state.get("review_result")
+    if review_result:
+        revision_instructions = review_result.get("revision_instructions", "")
+        issues = review_result.get("issues", [])
         system_parts.append(
-            f"\n\n## Previous Query Error\nYour last query failed with: {cube_error}\n"
-            "Please fix the query and try again with corrected member names or structure."
+            f"\n\n## Revision Required\n"
+            f"Your previous plan was reviewed and needs improvement.\n"
+            f"Issues: {json.dumps(issues)}\n"
+            f"Instructions: {revision_instructions}\n"
+            f"Please create an improved plan addressing these issues."
         )
 
     system = SystemMessage(content="".join(system_parts))
+
+    # Include conversation history for follow-up context
     messages = [system] + state["messages"]
 
-    response = await llm_with_tools.ainvoke(messages)
-
-    # Extract the tool call result
-    cube_query = None
-    if response.tool_calls:
-        tool_call = response.tool_calls[0]
-        tool_result = cube_builder_tool.invoke(tool_call["args"])
-        if tool_result.get("status") == "ok":
-            cube_query = tool_result["query"]
-            logger.info("CubeQuery from tool:\n%s", CubeQuery(**cube_query).model_dump_json(indent=2))
-        else:
-            return {
-                "cube_error": tool_result.get("message", "Tool validation failed"),
-                "retry_count": state.get("retry_count", 0) + 1,
-            }
-
-    if cube_query is None:
-        # LLM didn't call the tool – build a minimal AnalyticsReport with text
+    structured_llm = llm.with_structured_output(ReportPlan)
+    try:
+        plan: ReportPlan = await structured_llm.ainvoke(messages)
+    except Exception as exc:
+        logger.warning("Planner structured output failed: %s", exc)
+        # Fall back to a text-only report
         report = AnalyticsReport(
             report_id=str(uuid.uuid4()),
             summary_title="Response",
             blocks=[
                 *[ThoughtBlock(content=t) for t in state.get("thought_log", [])],
-                TextBlock(content=response.content),
+                TextBlock(content="I wasn't able to plan a report for this question. Could you try rephrasing?"),
             ],
         )
-        logger.info("AnalyticsReport (text-only):\n%s", report.model_dump_json(indent=2))
-        # Store the response as an AIMessage so the checkpointer persists it.
-        # In subsequent turns, the specialist LLM sees the full conversation
-        # (user questions + agent answers) and can handle follow-ups.
         ai_text = render_report_as_text(report)
         return {
             "analytics_report": report.model_dump(),
-            "cube_query": None,
             "messages": [AIMessage(content=ai_text)],
         }
 
-    measures = cube_query.get("measures", [])
-    dims = cube_query.get("dimensions", [])
-    thought = f"Querying {', '.join(measures)} by {', '.join(dims) or 'total'}."
+    logger.info("ReportPlan:\n%s", plan.model_dump_json(indent=2))
+
+    # Check if the plan has any data blocks at all
+    has_data_blocks = any(b.block_type != "text" for b in plan.blocks)
+
+    if not has_data_blocks:
+        # Pure text response — no queries needed, assemble directly
+        text_parts = []
+        for block in plan.blocks:
+            if block.text_guidance:
+                text_parts.append(block.text_guidance)
+        combined_text = " ".join(text_parts) if text_parts else plan.narrative_strategy
+
+        report = AnalyticsReport(
+            report_id=str(uuid.uuid4()),
+            summary_title=plan.summary_title,
+            blocks=[
+                *[ThoughtBlock(content=t) for t in state.get("thought_log", [])],
+                TextBlock(content=combined_text),
+            ],
+        )
+        ai_text = render_report_as_text(report)
+        return {
+            "analytics_report": report.model_dump(),
+            "messages": [AIMessage(content=ai_text)],
+        }
+
+    n_blocks = len(plan.blocks)
+    thought = f"Planning report: {plan.summary_title} ({n_blocks} blocks)"
     return {
-        "cube_query": cube_query,
+        "report_plan": plan.model_dump(),
+        "thought_log": state.get("thought_log", []) + [thought],
+        "executed_blocks": [],
+        "current_block_index": 0,
+    }
+
+
+async def block_executor_node(state: AgentState) -> dict:
+    """Execute a single block from the plan — processes one block per invocation."""
+    plan_data = state.get("report_plan")
+    if not plan_data:
+        return {"block_errors": ["No report plan found"]}
+
+    plan = ReportPlan(**plan_data)
+    idx = state.get("current_block_index", 0)
+
+    if idx >= len(plan.blocks):
+        return {}  # All blocks processed
+
+    block_plan = plan.blocks[idx]
+    executed = state.get("executed_blocks", [])
+    block_errors = state.get("block_errors", [])
+    thoughts = state.get("thought_log", [])
+
+    if block_plan.block_type == "text":
+        # Generate text using LLM with context from previously executed blocks
+        llm = _get_llm()
+        question = _get_user_question(state)
+
+        # Build context from previously executed blocks
+        data_context_parts = []
+        for eb_data in executed:
+            eb = ExecutedBlock(**eb_data)
+            if eb.data:
+                data_context_parts.append(
+                    f"Block '{eb.block_plan.purpose}' data preview: "
+                    f"{json.dumps(eb.data[:5], default=str)}"
+                )
+
+        data_context = "\n".join(data_context_parts) if data_context_parts else "No data available yet."
+
+        text_prompt = (
+            f"User's question: {question}\n\n"
+            f"Report context: {plan.narrative_strategy}\n\n"
+            f"This text block's purpose: {block_plan.purpose}\n"
+            f"Guidance: {block_plan.text_guidance or 'Write a clear, concise paragraph.'}\n\n"
+            f"Available data from other blocks:\n{data_context}\n\n"
+            "Write a clear, concise paragraph that directly addresses the purpose above. "
+            "Use specific numbers from the data if available. Do not use markdown headers."
+        )
+
+        response = await llm.ainvoke([HumanMessage(content=text_prompt)])
+        text_content = response.content.strip()
+
+        executed_block = ExecutedBlock(
+            block_id=block_plan.block_id,
+            block_plan=block_plan,
+            text_content=text_content,
+        )
+        thought = f"Executed block {idx + 1}/{len(plan.blocks)}: text"
+
+    else:
+        # Data block — build query, execute
+        spec = block_plan.query_spec
+        if not spec:
+            executed_block = ExecutedBlock(
+                block_id=block_plan.block_id,
+                block_plan=block_plan,
+                error="No query_spec provided for data block",
+            )
+            block_errors = block_errors + [f"Block {block_plan.block_id}: no query_spec"]
+            thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {block_plan.block_type} (error: no query)"
+        else:
+            cube_query = _build_cube_query_from_spec(spec)
+            if not cube_query:
+                executed_block = ExecutedBlock(
+                    block_id=block_plan.block_id,
+                    block_plan=block_plan,
+                    error="Query validation failed",
+                )
+                block_errors = block_errors + [f"Block {block_plan.block_id}: query validation failed"]
+                thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {block_plan.block_type} (validation error)"
+            else:
+                try:
+                    query_obj = CubeQuery(**cube_query) if isinstance(cube_query, dict) else cube_query
+                    logger.info("Executing block %s query:\n%s", block_plan.block_id, query_obj.model_dump_json(indent=2))
+                    result = await cube_client.execute_cube_query(query_obj)
+                    data = result.get("data", [])
+
+                    executed_block = ExecutedBlock(
+                        block_id=block_plan.block_id,
+                        block_plan=block_plan,
+                        cube_query=cube_query,
+                        data=data,
+                    )
+                    thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {block_plan.block_type} ({len(data)} rows)"
+                except Exception as exc:
+                    error_msg = str(exc)
+                    executed_block = ExecutedBlock(
+                        block_id=block_plan.block_id,
+                        block_plan=block_plan,
+                        cube_query=cube_query,
+                        error=error_msg,
+                    )
+                    block_errors = block_errors + [f"Block {block_plan.block_id}: {error_msg}"]
+                    thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {block_plan.block_type} (error)"
+
+    return {
+        "executed_blocks": executed + [executed_block.model_dump()],
+        "current_block_index": idx + 1,
+        "block_errors": block_errors,
+        "thought_log": thoughts + [thought],
+    }
+
+
+async def reviewer_node(state: AgentState) -> dict:
+    """Review the quality of executed blocks and decide whether to approve or revise."""
+    llm = _get_llm()
+    question = _get_user_question(state)
+    plan_data = state.get("report_plan", {})
+    executed = state.get("executed_blocks", [])
+    revision_count = state.get("revision_count", 0)
+
+    # Build summary of executed blocks for the reviewer
+    block_summaries = []
+    for eb_data in executed:
+        eb = ExecutedBlock(**eb_data)
+        summary = f"- {eb.block_id} ({eb.block_plan.block_type}): "
+        if eb.error:
+            summary += f"ERROR: {eb.error}"
+        elif eb.text_content:
+            summary += f"text ({len(eb.text_content)} chars)"
+        elif eb.data is not None:
+            summary += f"{len(eb.data)} rows"
+        else:
+            summary += "no data"
+        block_summaries.append(summary)
+
+    review_prompt = (
+        "You are a quality reviewer for analytics reports. Evaluate whether the "
+        "executed report blocks adequately answer the user's question.\n\n"
+        f"User's question: {question}\n\n"
+        f"Report plan: {json.dumps(plan_data, default=str)}\n\n"
+        f"Executed blocks:\n" + "\n".join(block_summaries) + "\n\n"
+        "Evaluate on these criteria:\n"
+        "1. Relevance: Do the blocks answer the user's question?\n"
+        "2. Data accuracy: Are there execution errors?\n"
+        "3. Visualization fit: Are the chart types appropriate?\n"
+        "4. Completeness: Is anything missing?\n\n"
+        "Score from 1-5 (5 is best). Set approved=true if score >= 4. "
+        "If not approved, provide specific revision_instructions for the planner."
+    )
+
+    structured_llm = llm.with_structured_output(ReviewResult)
+    try:
+        review: ReviewResult = await structured_llm.ainvoke([HumanMessage(content=review_prompt)])
+    except Exception as exc:
+        logger.warning("Reviewer structured output failed: %s", exc)
+        # Default to approved on reviewer failure
+        review = ReviewResult(quality_score=4, approved=True)
+
+    logger.info("ReviewResult:\n%s", review.model_dump_json(indent=2))
+
+    thought = f"Review score: {review.quality_score}/5 — {'approved' if review.approved else 'revision needed'}"
+
+    return {
+        "review_result": review.model_dump(),
+        "revision_count": revision_count + (0 if review.approved else 1),
         "thought_log": state.get("thought_log", []) + [thought],
     }
 
 
-async def data_validator_node(state: AgentState) -> dict:
-    """Execute the CubeQuery against CubeJS."""
-    raw_query = state.get("cube_query")
-    if not raw_query:
-        return {"cube_error": "No query to execute", "retry_count": state.get("retry_count", 0) + 1}
-
-    try:
-        query = CubeQuery(**raw_query) if isinstance(raw_query, dict) else raw_query
-        logger.info("CubeQuery for execution:\n%s", query.model_dump_json(indent=2))
-        result = await cube_client.execute_cube_query(query)
-        return {"cube_result": result, "cube_error": None}
-    except Exception as exc:
-        return {
-            "cube_error": str(exc),
-            "retry_count": state.get("retry_count", 0) + 1,
-        }
-
-
-async def formatter_node(state: AgentState) -> dict:
-    """Generate a structured AnalyticsReport from the query results."""
-    llm = _get_llm()
-    cube_result = state.get("cube_result", {})
-    data = cube_result.get("data", [])
-    preview = data[:20]
-
-    cube_query = state.get("cube_query", {})
-    system = SystemMessage(
-        content=(
-            "You are an analytics report formatter. Given CubeJS query results, decide "
-            "how to present them. Always include a table. Optionally include a chart:\n"
-            '- "line" when data has a time dimension with granularity (trend over time)\n'
-            '- "bar" when data has categorical dimensions with few groups (comparisons)\n'
-            "- null when only a narrative makes sense\n\n"
-            "Write a clear, concise narrative with key findings and specific numbers. "
-            "Directly address the user's question in your narrative."
-        )
-    )
-    # Without the original question, the formatter LLM only sees raw data and may
-    # write a generic summary instead of directly answering what the user asked.
-    user_questions = [m for m in state["messages"] if isinstance(m, HumanMessage)]
-    question_text = user_questions[-1].content if user_questions else ""
-    user_msg = HumanMessage(
-        content=(
-            f"User's question: {question_text}\n\n"
-            f"Query: {json.dumps(cube_query)}\n\n"
-            f"Results ({len(data)} rows, showing first {len(preview)}):\n"
-            f"{json.dumps(preview, indent=2)}"
-        )
-    )
-
-    structured_llm = llm.with_structured_output(FormatterDecision)
-    decision: FormatterDecision = await structured_llm.ainvoke([system, user_msg])
-    logger.info("FormatterDecision:\n%s", decision.model_dump_json(indent=2))
+async def assembler_node(state: AgentState) -> dict:
+    """Assemble executed blocks into a final AnalyticsReport. Pure mechanical — no LLM call."""
+    plan_data = state.get("report_plan", {})
+    plan = ReportPlan(**plan_data)
+    executed = state.get("executed_blocks", [])
 
     blocks = []
 
@@ -253,46 +454,69 @@ async def formatter_node(state: AgentState) -> dict:
     for thought in state.get("thought_log", []):
         blocks.append(ThoughtBlock(content=thought))
 
-    # TextBlock with narrative
-    blocks.append(TextBlock(content=decision.narrative))
+    # Convert executed blocks into report blocks
+    for eb_data in executed:
+        eb = ExecutedBlock(**eb_data)
+        bp = eb.block_plan
 
-    # TableBlock (always)
-    blocks.append(TableBlock(
-        title=decision.table_title,
-        columns=decision.table_columns,
-        cube_query=CubeQuery(**cube_query),
-    ))
+        if eb.error:
+            # Skip blocks with errors
+            continue
 
-    # Chart block (optional, based on LLM decision)
-    if decision.chart_type == "line":
-        blocks.append(LineChartBlock(
-            title=decision.chart_title or "Chart",
-            x_axis_key=decision.chart_x_or_category or "",
-            y_axis_key=decision.chart_y_or_value or "",
-            cube_query=CubeQuery(**cube_query),
+        if bp.block_type == "text":
+            if eb.text_content:
+                blocks.append(TextBlock(content=eb.text_content))
+
+        elif bp.block_type == "chart_line":
+            spec = bp.query_spec
+            if spec and eb.data is not None and eb.cube_query:
+                blocks.append(LineChartBlock(
+                    title=spec.title,
+                    x_axis_key=spec.x_or_category_key or "",
+                    y_axis_key=spec.y_or_value_key or "",
+                    cube_query=CubeQuery(**eb.cube_query),
+                    data=eb.data,
+                ))
+
+        elif bp.block_type == "chart_bar":
+            spec = bp.query_spec
+            if spec and eb.data is not None and eb.cube_query:
+                blocks.append(BarChartBlock(
+                    title=spec.title,
+                    category_key=spec.x_or_category_key or "",
+                    value_key=spec.y_or_value_key or "",
+                    cube_query=CubeQuery(**eb.cube_query),
+                    data=eb.data,
+                ))
+
+        elif bp.block_type == "table":
+            spec = bp.query_spec
+            if spec and eb.data is not None and eb.cube_query:
+                columns = spec.columns or list(eb.data[0].keys()) if eb.data else []
+                blocks.append(TableBlock(
+                    title=spec.title,
+                    columns=columns,
+                    cube_query=CubeQuery(**eb.cube_query),
+                    data=eb.data,
+                ))
+
+    # If all blocks had errors, add an error text
+    if not any(isinstance(b, (TextBlock, LineChartBlock, BarChartBlock, TableBlock)) for b in blocks):
+        error_msgs = state.get("block_errors", [])
+        blocks.append(TextBlock(
+            content=(
+                "I encountered errors while executing the data queries. "
+                f"Errors: {'; '.join(error_msgs) if error_msgs else 'Unknown errors'}\n\n"
+                "Could you try rephrasing your question?"
+            )
         ))
-    elif decision.chart_type == "bar":
-        blocks.append(BarChartBlock(
-            title=decision.chart_title or "Chart",
-            category_key=decision.chart_x_or_category or "",
-            value_key=decision.chart_y_or_value or "",
-            cube_query=CubeQuery(**cube_query),
-        ))
-
-    # Inject actual data into visualization blocks
-    for block in blocks:
-        if isinstance(block, (LineChartBlock, BarChartBlock, TableBlock)):
-            block.data = data
 
     report = AnalyticsReport(
         report_id=str(uuid.uuid4()),
-        summary_title=decision.summary_title,
+        summary_title=plan.summary_title,
         blocks=blocks,
     )
     logger.info("AnalyticsReport:\n%s", report.model_dump_json(indent=2))
-    # Store the formatted response as an AIMessage so the checkpointer persists it.
-    # In subsequent turns the LLM sees the full conversation (user questions +
-    # agent answers) and can handle follow-ups like "what about last month?".
     ai_text = render_report_as_text(report)
     return {
         "analytics_report": report.model_dump(),
@@ -301,12 +525,13 @@ async def formatter_node(state: AgentState) -> dict:
 
 
 async def formatter_error_node(state: AgentState) -> dict:
-    """Generate an AnalyticsReport with error information after retries are exhausted."""
-    cube_error = state.get("cube_error", "Unknown error")
+    """Generate an AnalyticsReport with error information after catastrophic failure."""
+    block_errors = state.get("block_errors", [])
+    error_msg = "; ".join(block_errors) if block_errors else "Unknown error"
     blocks = [ThoughtBlock(content=t) for t in state.get("thought_log", [])]
     blocks.append(TextBlock(
         content=(
-            f"I wasn't able to retrieve the data. **Error:** {cube_error}\n\n"
+            f"I wasn't able to retrieve the data. **Error:** {error_msg}\n\n"
             "Could you try rephrasing your question?"
         )
     ))
@@ -317,8 +542,6 @@ async def formatter_error_node(state: AgentState) -> dict:
         blocks=blocks,
     )
     logger.info("AnalyticsReport (error):\n%s", report.model_dump_json(indent=2))
-    # Persist the error response as an AIMessage so the conversation history
-    # reflects that this turn failed — the user can see it and try again.
     ai_text = render_report_as_text(report)
     return {
         "analytics_report": report.model_dump(),
@@ -330,21 +553,39 @@ async def formatter_error_node(state: AgentState) -> dict:
 # Conditional edges
 # ---------------------------------------------------------------------------
 
-def after_specialist(state: AgentState) -> str:
-    """Route after specialist: if we have a query, validate; if text, go to end."""
-    if state.get("cube_query") is not None:
-        return "data_validator"
-    # LLM responded with text directly (no tool call)
+def after_planner(state: AgentState) -> str:
+    """Route after planner: if analytics_report set (text-only) → end; else → block_executor."""
+    if state.get("analytics_report") is not None:
+        return "end"
+    if state.get("report_plan") is not None:
+        return "block_executor"
     return "end"
 
 
-def after_data_validator(state: AgentState) -> str:
-    """Route after data validation: success -> formatter, error -> retry or error."""
-    if state.get("cube_result") is not None:
-        return "formatter"
-    if state.get("retry_count", 0) > MAX_RETRIES:
-        return "formatter_error"
-    return "specialist"  # retry
+def after_block_executor(state: AgentState) -> str:
+    """Route after block executor: loop or proceed to reviewer."""
+    plan_data = state.get("report_plan")
+    if not plan_data:
+        return "reviewer"
+    plan = ReportPlan(**plan_data)
+    idx = state.get("current_block_index", 0)
+    if idx < len(plan.blocks):
+        return "block_executor"  # more blocks to process
+    return "reviewer"
+
+
+def after_reviewer(state: AgentState) -> str:
+    """Route after reviewer: if approved → assembler; if revision needed → planner."""
+    review_data = state.get("review_result")
+    if not review_data:
+        return "assembler"
+    review = ReviewResult(**review_data)
+    if review.approved:
+        return "assembler"
+    # Check revision count safety valve
+    if state.get("revision_count", 0) >= MAX_REVISIONS:
+        return "assembler"
+    return "planner"
 
 
 # ---------------------------------------------------------------------------
@@ -355,23 +596,27 @@ def build_workflow() -> StateGraph:
     workflow = StateGraph(AgentState)
 
     workflow.add_node("router", router_node)
-    workflow.add_node("specialist", specialist_node)
-    workflow.add_node("data_validator", data_validator_node)
-    workflow.add_node("formatter", formatter_node)
+    workflow.add_node("planner", planner_node)
+    workflow.add_node("block_executor", block_executor_node)
+    workflow.add_node("reviewer", reviewer_node)
+    workflow.add_node("assembler", assembler_node)
     workflow.add_node("formatter_error", formatter_error_node)
 
     workflow.set_entry_point("router")
-    workflow.add_edge("router", "specialist")
-    workflow.add_conditional_edges("specialist", after_specialist, {
-        "data_validator": "data_validator",
+    workflow.add_edge("router", "planner")
+    workflow.add_conditional_edges("planner", after_planner, {
+        "block_executor": "block_executor",
         "end": END,
     })
-    workflow.add_conditional_edges("data_validator", after_data_validator, {
-        "formatter": "formatter",
-        "formatter_error": "formatter_error",
-        "specialist": "specialist",
+    workflow.add_conditional_edges("block_executor", after_block_executor, {
+        "block_executor": "block_executor",
+        "reviewer": "reviewer",
     })
-    workflow.add_edge("formatter", END)
+    workflow.add_conditional_edges("reviewer", after_reviewer, {
+        "assembler": "assembler",
+        "planner": "planner",
+    })
+    workflow.add_edge("assembler", END)
     workflow.add_edge("formatter_error", END)
 
     return workflow

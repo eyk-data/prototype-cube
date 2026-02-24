@@ -95,16 +95,57 @@ class AnalyticsReport(BaseModel):
     blocks: List[AnalyticsBlock] = Field(default_factory=list)
 
 
-class FormatterDecision(BaseModel):
-    """LLM output: how to present the query results."""
+# ---------------------------------------------------------------------------
+# Planner models (plan-execute-review architecture)
+# ---------------------------------------------------------------------------
+
+class BlockQuerySpec(BaseModel):
+    """Query parameters for a single data block. The planner fills these out using cube metadata."""
+    measures: List[str]
+    dimensions: List[str] = Field(default_factory=list)
+    time_dimensions: Optional[List[dict]] = None
+    filters: Optional[List[dict]] = None
+    order: Optional[dict] = None
+    limit: Optional[int] = None
+    # Visualization config
+    title: str
+    x_or_category_key: Optional[str] = None  # For charts: the x-axis / category key
+    y_or_value_key: Optional[str] = None      # For charts: the y-axis / value key
+    columns: Optional[List[str]] = None       # For tables: which columns to display
+
+
+class BlockPlan(BaseModel):
+    """A single planned block in the report."""
+    block_id: str  # e.g. "block_1"
+    block_type: Literal["text", "chart_line", "chart_bar", "table"]
+    purpose: str   # Why this block exists, what insight it conveys
+    query_spec: Optional[BlockQuerySpec] = None  # None for text blocks
+    text_guidance: Optional[str] = None          # For text blocks: what to write about
+
+
+class ReportPlan(BaseModel):
+    """The planner's structured output — the full report blueprint."""
     summary_title: str
-    narrative: str
-    table_title: str
-    table_columns: List[str]
-    chart_type: Optional[Literal["line", "bar"]] = None
-    chart_title: Optional[str] = None
-    chart_x_or_category: Optional[str] = None
-    chart_y_or_value: Optional[str] = None
+    narrative_strategy: str  # How the blocks build on each other
+    blocks: List[BlockPlan]
+
+
+class ExecutedBlock(BaseModel):
+    """A block after execution — query ran, data attached."""
+    block_id: str
+    block_plan: BlockPlan
+    cube_query: Optional[dict] = None
+    data: Optional[List[dict]] = None
+    error: Optional[str] = None
+    text_content: Optional[str] = None  # For text blocks
+
+
+class ReviewResult(BaseModel):
+    """The reviewer's quality assessment."""
+    quality_score: int = Field(ge=1, le=5)
+    issues: List[str] = Field(default_factory=list)
+    revision_instructions: Optional[str] = None
+    approved: bool
 
 
 def render_report_as_text(report: AnalyticsReport) -> str:

@@ -20,12 +20,42 @@ QUERY_FORMAT_INSTRUCTIONS = """\
 - fact_attributions → dim_product_variants, dim_customers, dim_attribution_models, fact_daily_ads
 - email_performance has no joins (standalone)
 
-## Query Format
-- Time dimensions use: {"dimension": "cube.field", "granularity": "day|week|month|quarter|year", "dateRange": "Last 30 days"}
-- Filters use: {"member": "cube.field", "operator": "equals|notEquals|contains|gt|lt|gte|lte|set|notSet|inDateRange", "values": ["..."]}
-- Order uses: {"cube.field": "asc|desc"}
-- When querying across joined cubes, use measures from the fact table with dimensions from the joined dimension table
-- Always prefix member names with the cube name (e.g. fact_sales_items.gross_sales, NOT just gross_sales)
+## Query Construction Rules
+
+### Time Dimensions (CRITICAL)
+timeDimensions serves two purposes: date filtering AND time grouping. The `granularity` key controls which:
+
+1. **Date filtering only (no time grouping)** — OMIT granularity:
+   Use when the user wants totals/aggregates within a date range (e.g. "top products in the last 30 days",
+   "total revenue this month").
+   {"dimension": "cube.field", "dateRange": "Last 30 days"}
+   This filters rows to the date range but does NOT add a time column to results.
+
+2. **Trend over time (time grouping)** — INCLUDE granularity:
+   Use when the user wants to see how something changes over time (e.g. "daily revenue trend",
+   "monthly sales over the past year", "week-over-week performance").
+   {"dimension": "cube.field", "granularity": "day|week|month|quarter|year", "dateRange": "Last 6 months"}
+   This adds a time column to results, grouping rows by the chosen period.
+
+**Decision rule:** If the question asks for a ranking, total, comparison, or "top/bottom N" within a time range
+→ OMIT granularity. If the question asks for a trend, evolution, or pattern over time → INCLUDE granularity.
+
+### Valid dateRange Formats
+- Relative: "Last 30 days", "Last 7 days", "Last 6 months", "Last year", "This month", "This quarter", "This year", "Today", "Yesterday"
+- Absolute array: ["2024-01-01", "2024-12-31"]
+
+### Filters
+{"member": "cube.field", "operator": "<op>", "values": ["..."]}
+Operators: equals, notEquals, contains, notContains, gt, gte, lt, lte, set, notSet, startsWith, endsWith,
+inDateRange, notInDateRange, beforeDate, afterDate, beforeOrOnDate, afterOrOnDate
+
+### Order and Limit
+- Order: {"cube.field": "asc|desc"}
+- Use limit (e.g. 10) for "top N" or "bottom N" questions. Combine with order to get ranked results.
+
+### General Rules
+- When querying across joined cubes, use measures from the fact table with dimensions from the joined dimension table.
+- Always prefix member names with the cube name (e.g. fact_sales_items.gross_sales, NOT just gross_sales).
 """
 
 FALLBACK_TEXT = (

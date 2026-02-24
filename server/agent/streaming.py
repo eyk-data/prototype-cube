@@ -71,6 +71,7 @@ async def langgraph_to_datastream(
             report_data = node_output.get("analytics_report")
             if report_data:
                 report = AnalyticsReport(**report_data)
+                title_emitted = False
 
                 for block in report.blocks:
                     if isinstance(block, ThoughtBlock):
@@ -78,10 +79,12 @@ async def langgraph_to_datastream(
                         continue
 
                     elif isinstance(block, TextBlock):
-                        # Stream title + narrative as text deltas
-                        title_text = f"## {report.summary_title}\n\n"
-                        for word in title_text.split(" "):
-                            yield f'0:{json.dumps(word + " ")}\n'
+                        # Stream title before the first text block only
+                        if not title_emitted:
+                            title_text = f"## {report.summary_title}\n\n"
+                            for word in title_text.split(" "):
+                                yield f'0:{json.dumps(word + " ")}\n'
+                            title_emitted = True
                         for word in block.content.split(" "):
                             yield f'0:{json.dumps(word + " ")}\n'
                         yield f'0:{json.dumps(chr(10) + chr(10))}\n'

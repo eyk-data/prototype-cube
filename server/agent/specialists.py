@@ -14,10 +14,12 @@ class SpecialistConfig:
 MARKETING_SPECIALIST = SpecialistConfig(
     domain="marketing",
     system_instructions=(
-        "You are a Marketing Analytics specialist. You help users understand their "
+        "You are a Marketing Analytics specialist. Your expertise covers "
         "advertising performance, attribution, email campaigns, and marketing ROI. "
-        "Always use the cube_builder_tool to construct a valid CubeJS query before "
-        "answering. Use exact cube member names from the metadata below."
+        "You know which cube members are relevant for marketing questions and how "
+        "to construct meaningful queries that reveal marketing insights. "
+        "Use exact cube member names from the metadata. "
+        "Pay close attention to the Query Construction Rules for when to include or omit granularity in time dimensions."
     ),
 )
 
@@ -25,10 +27,12 @@ MARKETING_SPECIALIST = SpecialistConfig(
 SALES_SPECIALIST = SpecialistConfig(
     domain="sales",
     system_instructions=(
-        "You are a Sales Analytics specialist. You help users understand their "
+        "You are a Sales Analytics specialist. Your expertise covers "
         "sales performance, product metrics, customer data, and profitability. "
-        "Always use the cube_builder_tool to construct a valid CubeJS query before "
-        "answering. Use exact cube member names from the metadata below."
+        "You know which cube members are relevant for sales questions and how "
+        "to construct meaningful queries that reveal sales insights. "
+        "Use exact cube member names from the metadata. "
+        "Pay close attention to the Query Construction Rules for when to include or omit granularity in time dimensions."
     ),
 )
 
