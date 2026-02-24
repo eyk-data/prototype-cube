@@ -14,5 +14,6 @@ cube/*.log
 gcp-credentials.json
 
 webapp/node_modules
+webapp/build
 webapp/package-lock.json
 server/package-lock.json

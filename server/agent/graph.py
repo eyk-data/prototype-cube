@@ -7,7 +7,7 @@ from psycopg.rows import dict_row
 import uuid
 from typing import Annotated, Optional
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, StateGraph
@@ -25,6 +25,7 @@ from .models import (
     TableBlock,
     TextBlock,
     ThoughtBlock,
+    render_report_as_text,
 )
 from .specialists import SPECIALISTS
 from .tools import cube_builder_tool
@@ -82,20 +83,24 @@ async def router_node(state: AgentState) -> dict:
     llm = _get_llm()
     system = SystemMessage(
         content=(
-            "You are a routing agent. Given the user's question, respond with ONLY "
-            "one word: either 'marketing' or 'sales'.\n\n"
+            "You are a routing agent. Given the user's question and conversation "
+            "history, respond with ONLY one word: either 'marketing' or 'sales'.\n\n"
             "Marketing topics: ads, campaigns, impressions, clicks, CTR, CPC, CPM, "
             "ROAS, CPA, attribution, email performance, ad spend, channel revenue.\n\n"
             "Sales topics: orders, revenue, products, customers, gross profit, margins, "
             "discounts, returns, shipping, AOV, SKUs, variants, stores.\n\n"
+            "For follow-up questions (e.g. 'what about last month?'), infer the domain "
+            "from the prior conversation.\n\n"
             "If unsure, default to 'marketing'."
         )
     )
-    # Get the last user message
-    user_messages = [m for m in state["messages"] if isinstance(m, HumanMessage)]
-    last_msg = user_messages[-1] if user_messages else HumanMessage(content="")
+    # Follow-up questions like "What about last month?" are ambiguous without prior
+    # context. Passing recent messages lets the router infer the domain from the
+    # ongoing conversation. A window of 6 messages (~3 turns) keeps the prompt
+    # small while providing enough context.
+    recent_messages = state["messages"][-6:]
 
-    response = await llm.ainvoke([system, last_msg])
+    response = await llm.ainvoke([system] + recent_messages)
     domain = response.content.strip().lower()
     if domain not in SPECIALISTS:
         domain = "marketing"
@@ -103,9 +108,13 @@ async def router_node(state: AgentState) -> dict:
     thought = f"Analyzing your question — routing to the {domain} analytics specialist."
     return {
         "specialist_domain": domain,
+        # Per-turn scratch fields (query, result, error, report) persist in the
+        # checkpoint between turns and must be reset at the start of each new turn
+        # to avoid stale data from the previous turn leaking into the pipeline.
         "cube_query": None,
         "cube_result": None,
         "cube_error": None,
+        "analytics_report": None,
         "retry_count": 0,
         "thought_log": [thought],
     }
@@ -160,7 +169,15 @@ async def specialist_node(state: AgentState) -> dict:
                 TextBlock(content=response.content),
             ],
         )
-        return {"analytics_report": report.model_dump(), "cube_query": None}
+        # Store the response as an AIMessage so the checkpointer persists it.
+        # In subsequent turns, the specialist LLM sees the full conversation
+        # (user questions + agent answers) and can handle follow-ups.
+        ai_text = render_report_as_text(report)
+        return {
+            "analytics_report": report.model_dump(),
+            "cube_query": None,
+            "messages": [AIMessage(content=ai_text)],
+        }
 
     measures = cube_query.get("measures", [])
     dims = cube_query.get("dimensions", [])
@@ -203,11 +220,17 @@ async def formatter_node(state: AgentState) -> dict:
             '- "line" when data has a time dimension with granularity (trend over time)\n'
             '- "bar" when data has categorical dimensions with few groups (comparisons)\n'
             "- null when only a narrative makes sense\n\n"
-            "Write a clear, concise narrative with key findings and specific numbers."
+            "Write a clear, concise narrative with key findings and specific numbers. "
+            "Directly address the user's question in your narrative."
         )
     )
+    # Without the original question, the formatter LLM only sees raw data and may
+    # write a generic summary instead of directly answering what the user asked.
+    user_questions = [m for m in state["messages"] if isinstance(m, HumanMessage)]
+    question_text = user_questions[-1].content if user_questions else ""
     user_msg = HumanMessage(
         content=(
+            f"User's question: {question_text}\n\n"
             f"Query: {json.dumps(cube_query)}\n\n"
             f"Results ({len(data)} rows, showing first {len(preview)}):\n"
             f"{json.dumps(preview, indent=2)}"
@@ -259,7 +282,14 @@ async def formatter_node(state: AgentState) -> dict:
         summary_title=decision.summary_title,
         blocks=blocks,
     )
-    return {"analytics_report": report.model_dump()}
+    # Store the formatted response as an AIMessage so the checkpointer persists it.
+    # In subsequent turns the LLM sees the full conversation (user questions +
+    # agent answers) and can handle follow-ups like "what about last month?".
+    ai_text = render_report_as_text(report)
+    return {
+        "analytics_report": report.model_dump(),
+        "messages": [AIMessage(content=ai_text)],
+    }
 
 
 async def formatter_error_node(state: AgentState) -> dict:
@@ -278,7 +308,13 @@ async def formatter_error_node(state: AgentState) -> dict:
         summary_title="Error",
         blocks=blocks,
     )
-    return {"analytics_report": report.model_dump()}
+    # Persist the error response as an AIMessage so the conversation history
+    # reflects that this turn failed — the user can see it and try again.
+    ai_text = render_report_as_text(report)
+    return {
+        "analytics_report": report.model_dump(),
+        "messages": [AIMessage(content=ai_text)],
+    }
 
 
 # ---------------------------------------------------------------------------

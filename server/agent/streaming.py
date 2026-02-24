@@ -41,11 +41,14 @@ async def langgraph_to_datastream(
     graph = await get_graph()
     message_id = str(uuid.uuid4())
 
-    # Convert frontend messages to LangChain format
-    lc_messages = []
-    for msg in messages:
-        if msg.get("role") == "user":
-            lc_messages.append(HumanMessage(content=msg["content"]))
+    # The frontend sends the full message history per Vercel AI SDK convention,
+    # but we only need the latest user message. The LangGraph checkpointer
+    # maintains the full conversation state server-side — sending all messages
+    # would create duplicates because `add_messages` appends by ID and new
+    # HumanMessage objects get fresh IDs each time.
+    user_messages = [msg for msg in messages if msg.get("role") == "user"]
+    last_user = user_messages[-1] if user_messages else {"content": ""}
+    lc_messages = [HumanMessage(content=last_user["content"])]
 
     # Start frame
     yield f'f:{json.dumps({"messageId": message_id})}\n'
