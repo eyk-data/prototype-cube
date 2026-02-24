@@ -68,6 +68,13 @@ Always test locally first before Docker builds — it's much faster:
 - **Server**: Run `python -m py_compile server/agent/<file>.py` to syntax-check Python files. Server dependencies (langchain, etc.) are Docker-only, so full imports won't work locally, but `py_compile` catches syntax issues.
 - **Docker**: Only use `docker compose build && docker compose up` for end-to-end integration testing after local checks pass. Use `--no-cache` on the specific service if you suspect layer caching issues (e.g., `docker compose build --no-cache webapp`).
 
+## Planning & Verification Discipline
+
+When implementing a plan:
+1. **ALWAYS create a todo list** that includes verification/testing steps as explicit tasks — not just the implementation steps.
+2. **ALWAYS run verification steps** after implementing changes. Never skip them, even if the code "looks right."
+3. Iterate until verification passes. Do not mark work as done until tests/checks confirm it works.
+
 ## Dummy Data
 
 `dummy_data/` contains SQL init scripts (`fill_destination1.sql`, `fill_destination2.sql`) that populate the two Postgres containers on startup.

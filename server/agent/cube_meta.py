@@ -7,6 +7,7 @@ import time
 from . import cube_client
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 _CACHE_TTL = 300  # 5 minutes
 
@@ -14,11 +15,16 @@ _cached_text: str | None = None
 _cached_at: float = 0.0
 
 QUERY_FORMAT_INSTRUCTIONS = """\
+## Join Relationships
+- fact_sales_items → dim_product_variants, dim_customers
+- fact_attributions → dim_product_variants, dim_customers, dim_attribution_models, fact_daily_ads
+- email_performance has no joins (standalone)
+
 ## Query Format
 - Time dimensions use: {"dimension": "cube.field", "granularity": "day|week|month|quarter|year", "dateRange": "Last 30 days"}
 - Filters use: {"member": "cube.field", "operator": "equals|notEquals|contains|gt|lt|gte|lte|set|notSet|inDateRange", "values": ["..."]}
 - Order uses: {"cube.field": "asc|desc"}
-- When querying sales with product details, use fact_sales_items measures with dim_product_variants dimensions (they are joined)
+- When querying across joined cubes, use measures from the fact table with dimensions from the joined dimension table
 - Always prefix member names with the cube name (e.g. fact_sales_items.gross_sales, NOT just gross_sales)
 """
 
@@ -29,15 +35,27 @@ FALLBACK_TEXT = (
     + QUERY_FORMAT_INSTRUCTIONS
 )
 
-# Map Cube meta API measure types to the labels used in prompts
-_MEASURE_TYPE_MAP = {
+# Map Cube meta API aggType values to the labels used in prompts.
+# aggType "number" means a derived/calculated metric (no direct aggregation).
+_AGG_TYPE_MAP = {
     "number": "calculated",
+    "countDistinct": "count_distinct",
+    "runningTotal": "running_total",
 }
 
 
-def _format_member(name: str, raw_type: str) -> str:
-    display_type = _MEASURE_TYPE_MAP.get(raw_type, raw_type)
-    return f"{name} ({display_type})"
+def _is_visible(member: dict) -> bool:
+    return member.get("isVisible", True) and member.get("public", True)
+
+
+def _format_measure(m: dict) -> str:
+    agg = m.get("aggType", m.get("type", ""))
+    display_type = _AGG_TYPE_MAP.get(agg, agg)
+    return f"{m['name']} ({display_type})"
+
+
+def _format_dimension(d: dict) -> str:
+    return f"{d['name']} ({d.get('type', 'string')})"
 
 
 def format_cube_meta(meta: dict) -> str:
@@ -50,24 +68,15 @@ def format_cube_meta(meta: dict) -> str:
         title = cube.get("title", name)
         lines.append(f"### {name} ({title})")
 
-        measures = cube.get("measures", [])
+        measures = [m for m in cube.get("measures", []) if _is_visible(m)]
         if measures:
-            formatted = ", ".join(
-                _format_member(m["name"], m["type"]) for m in measures
-            )
+            formatted = ", ".join(_format_measure(m) for m in measures)
             lines.append(f"Measures: {formatted}")
 
-        dimensions = cube.get("dimensions", [])
+        dimensions = [d for d in cube.get("dimensions", []) if _is_visible(d)]
         if dimensions:
-            formatted = ", ".join(
-                _format_member(d["name"], d["type"]) for d in dimensions
-            )
+            formatted = ", ".join(_format_dimension(d) for d in dimensions)
             lines.append(f"Dimensions: {formatted}")
-
-        joins = cube.get("joins", [])
-        if joins:
-            join_names = ", ".join(j["name"] for j in joins)
-            lines.append(f"Joins: {join_names}")
 
         lines.append("")  # blank line between cubes
 
