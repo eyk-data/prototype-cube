@@ -61,6 +61,13 @@ Flow:
 - No build tooling beyond CRA defaults; no test suite configured beyond CRA placeholder
 - Uses Ant Design (`antd`) for table rendering
 
+## Verifying Changes
+
+Always test locally first before Docker builds — it's much faster:
+- **Webapp**: Run `cd webapp && npx react-scripts build` to check for compile errors (missing modules, syntax errors, bad imports). No need to `docker compose build` for quick validation.
+- **Server**: Run `python -m py_compile server/agent/<file>.py` to syntax-check Python files. Server dependencies (langchain, etc.) are Docker-only, so full imports won't work locally, but `py_compile` catches syntax issues.
+- **Docker**: Only use `docker compose build && docker compose up` for end-to-end integration testing after local checks pass. Use `--no-cache` on the specific service if you suspect layer caching issues (e.g., `docker compose build --no-cache webapp`).
+
 ## Dummy Data
 
 `dummy_data/` contains SQL init scripts (`fill_destination1.sql`, `fill_destination2.sql`) that populate the two Postgres containers on startup.

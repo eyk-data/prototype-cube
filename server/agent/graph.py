@@ -15,6 +15,7 @@ from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
 from . import cube_client
+from .cube_meta import get_cube_meta_context
 from .models import (
     AnalyticsReport,
     BarChartBlock,
@@ -116,10 +117,11 @@ async def specialist_node(state: AgentState) -> dict:
     llm = _get_llm()
     llm_with_tools = llm.bind_tools([cube_builder_tool])
 
+    cube_meta_context = await get_cube_meta_context()
     system_parts = [
         config.system_instructions,
         "\n\n",
-        config.cube_meta_context,
+        cube_meta_context,
     ]
 
     # If retrying after a cube error, include the error for self-correction
@@ -246,6 +248,11 @@ async def formatter_node(state: AgentState) -> dict:
             value_key=decision.chart_y_or_value or "",
             cube_query=CubeQuery(**cube_query),
         ))
+
+    # Inject actual data into visualization blocks
+    for block in blocks:
+        if isinstance(block, (LineChartBlock, BarChartBlock, TableBlock)):
+            block.data = data
 
     report = AnalyticsReport(
         report_id=str(uuid.uuid4()),

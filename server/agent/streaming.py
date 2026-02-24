@@ -7,7 +7,22 @@ from typing import AsyncGenerator
 from langchain_core.messages import HumanMessage
 
 from .graph import get_graph
-from .models import AnalyticsReport, ThoughtBlock, render_report_as_text
+from .models import (
+    AnalyticsReport,
+    BarChartBlock,
+    LineChartBlock,
+    TableBlock,
+    TextBlock,
+    ThoughtBlock,
+)
+
+
+def _tool_call_lines(tool_name: str, args: dict) -> list[str]:
+    """Generate Vercel AI SDK data stream tool-call + tool-result line pair."""
+    call_id = f"call_{uuid.uuid4().hex[:24]}"
+    call_line = f'9:{json.dumps({"toolCallId": call_id, "toolName": tool_name, "args": args})}\n'
+    result_line = f'a:{json.dumps({"toolCallId": call_id, "result": "{}"})}\n'
+    return [call_line, result_line]
 
 
 async def langgraph_to_datastream(
@@ -16,10 +31,12 @@ async def langgraph_to_datastream(
     """Bridge LangGraph execution to Vercel AI SDK data stream protocol v1.
 
     Yields lines in the format:
-        f:{"messageId":"..."}\n          - start frame
-        0:"text chunk"\n                 - text delta
-        e:{"finishReason":"stop"}\n      - finish step
-        d:{"finishReason":"stop"}\n      - done
+        f:{"messageId":"..."}            - start frame
+        0:"text chunk"                   - text delta
+        9:{"toolCallId":...}             - tool call (visualization blocks)
+        a:{"toolCallId":...,"result":..} - tool result
+        e:{"finishReason":"stop"}        - finish step
+        d:{"finishReason":"stop"}        - done
     """
     graph = await get_graph()
     message_id = str(uuid.uuid4())
@@ -39,7 +56,7 @@ async def langgraph_to_datastream(
 
     async for event in graph.astream(input_state, config=config, stream_mode="updates"):
         for node_name, node_output in event.items():
-            # Stream new thoughts immediately as markdown blockquotes
+            # Stream new thoughts incrementally as italic blockquotes
             thought_log = node_output.get("thought_log")
             if thought_log and isinstance(thought_log, list):
                 new_thoughts = thought_log[emitted_thought_count:]
@@ -47,14 +64,53 @@ async def langgraph_to_datastream(
                     yield f'0:{json.dumps(f"> *{thought}*{chr(10)}{chr(10)}")}\n'
                 emitted_thought_count = len(thought_log)
 
-            # Stream final report (without ThoughtBlocks — already sent above)
+            # Stream final report block-by-block
             report_data = node_output.get("analytics_report")
             if report_data:
                 report = AnalyticsReport(**report_data)
-                report.blocks = [b for b in report.blocks if not isinstance(b, ThoughtBlock)]
-                text = render_report_as_text(report)
-                for word in text.split(" "):
-                    yield f'0:{json.dumps(word + " ")}\n'
+
+                for block in report.blocks:
+                    if isinstance(block, ThoughtBlock):
+                        # Already streamed incrementally above; skip duplicates
+                        continue
+
+                    elif isinstance(block, TextBlock):
+                        # Stream title + narrative as text deltas
+                        title_text = f"## {report.summary_title}\n\n"
+                        for word in title_text.split(" "):
+                            yield f'0:{json.dumps(word + " ")}\n'
+                        for word in block.content.split(" "):
+                            yield f'0:{json.dumps(word + " ")}\n'
+                        yield f'0:{json.dumps(chr(10) + chr(10))}\n'
+
+                    elif isinstance(block, LineChartBlock):
+                        args = {
+                            "title": block.title,
+                            "x_axis_key": block.x_axis_key,
+                            "y_axis_key": block.y_axis_key,
+                            "data": block.data or [],
+                        }
+                        for line in _tool_call_lines("chart_line", args):
+                            yield line
+
+                    elif isinstance(block, BarChartBlock):
+                        args = {
+                            "title": block.title,
+                            "category_key": block.category_key,
+                            "value_key": block.value_key,
+                            "data": block.data or [],
+                        }
+                        for line in _tool_call_lines("chart_bar", args):
+                            yield line
+
+                    elif isinstance(block, TableBlock):
+                        args = {
+                            "title": block.title,
+                            "columns": block.columns,
+                            "data": block.data or [],
+                        }
+                        for line in _tool_call_lines("table", args):
+                            yield line
 
     # Finish + done events
     yield f'e:{json.dumps({"finishReason": "stop", "usage": {"promptTokens": 0, "completionTokens": 0}})}\n'

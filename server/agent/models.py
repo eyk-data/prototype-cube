@@ -63,6 +63,7 @@ class LineChartBlock(BaseModel):
     x_axis_key: str
     y_axis_key: str
     cube_query: CubeQuery
+    data: Optional[List[dict]] = None
 
 
 class BarChartBlock(BaseModel):
@@ -71,6 +72,7 @@ class BarChartBlock(BaseModel):
     category_key: str
     value_key: str
     cube_query: CubeQuery
+    data: Optional[List[dict]] = None
 
 
 class TableBlock(BaseModel):
@@ -78,6 +80,7 @@ class TableBlock(BaseModel):
     title: str
     columns: List[str]
     cube_query: CubeQuery
+    data: Optional[List[dict]] = None
 
 
 AnalyticsBlock = Annotated[

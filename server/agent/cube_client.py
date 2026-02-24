@@ -19,6 +19,17 @@ def _make_token() -> str:
     return jwt.encode(payload, CUBE_API_SECRET, algorithm="HS256")
 
 
+async def fetch_cube_meta() -> dict:
+    """Fetch model metadata from the CubeJS /meta endpoint."""
+    token = _make_token()
+    url = f"{CUBE_BASE_URL}/cubejs-api/v1/meta"
+    headers = {"Authorization": token}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(url, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+
+
 async def execute_cube_query(query: CubeQuery) -> dict:
     """Execute a CubeQuery against the CubeJS REST API and return the JSON response."""
     token = _make_token()
