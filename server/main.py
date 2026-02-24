@@ -27,11 +27,8 @@ from app.agent.streaming import langgraph_to_datastream
 CUBE_API_SECRET = os.environ.get("CUBE_API_SECRET") or os.environ.get("CUBEJS_API_SECRET", "apisecret")
 CUBEJS_BQ_DATASET = os.environ.get("CUBEJS_BQ_DATASET", "")
 
-sqlite_file_name = "api.db"
-sqlite_url = f"sqlite:///{sqlite_file_name}"
-
-connect_args = {"check_same_thread": False}
-engine = create_engine(sqlite_url, echo=True, connect_args=connect_args)
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/server")
+engine = create_engine(DATABASE_URL, echo=True)
 
 
 class Destination(SQLModel, table=True):
@@ -63,10 +60,10 @@ class Tenant(SQLModel, table=True):
 def setup():
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
-        # Delete old destinations
-        statement = delete(Destination)
-        session.exec(statement)
+        # Delete old data (tenants first due to FK constraint)
         statement = delete(Tenant)
+        session.exec(statement)
+        statement = delete(Destination)
         session.exec(statement)
         session.commit()
 
