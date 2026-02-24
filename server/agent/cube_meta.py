@@ -12,6 +12,7 @@ logging.basicConfig(level=logging.INFO)
 _CACHE_TTL = 300  # 5 minutes
 
 _cached_text: str | None = None
+_cached_raw_meta: dict | None = None
 _cached_at: float = 0.0
 
 QUERY_FORMAT_INSTRUCTIONS = """\
@@ -118,7 +119,7 @@ async def get_cube_meta_context() -> str:
 
     On fetch failure, returns stale cache if available, otherwise a fallback string.
     """
-    global _cached_text, _cached_at
+    global _cached_text, _cached_raw_meta, _cached_at
 
     now = time.monotonic()
     if _cached_text is not None and (now - _cached_at) < _CACHE_TTL:
@@ -126,6 +127,7 @@ async def get_cube_meta_context() -> str:
 
     try:
         meta = await cube_client.fetch_cube_meta()
+        _cached_raw_meta = meta
         _cached_text = format_cube_meta(meta) + "\n" + QUERY_FORMAT_INSTRUCTIONS
         _cached_at = now
         logger.info("Cube meta cache refreshed")
@@ -136,3 +138,24 @@ async def get_cube_meta_context() -> str:
             logger.info("Serving stale Cube meta cache")
             return _cached_text
         return FALLBACK_TEXT
+
+
+async def get_valid_member_names() -> set[str] | None:
+    """Return set of all valid cube member names. None if metadata unavailable."""
+    global _cached_raw_meta
+
+    # Ensure cache is populated
+    if _cached_raw_meta is None:
+        await get_cube_meta_context()
+    if _cached_raw_meta is None:
+        return None
+
+    names: set[str] = set()
+    for cube in _cached_raw_meta.get("cubes", []):
+        for m in cube.get("measures", []):
+            if _is_visible(m):
+                names.add(m["name"])
+        for d in cube.get("dimensions", []):
+            if _is_visible(d):
+                names.add(d["name"])
+    return names
