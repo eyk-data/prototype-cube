@@ -1,0 +1,35 @@
+cubes:
+  - name: dim_attribution_models
+    title: Attribution Models
+    description: Dimension table of attribution models
+    sql: SELECT * FROM { COMPILE_CONTEXT.securityContext.dataset }.dim_attribution_models
+
+    dimensions:
+      - name: sk
+        title: SK
+        primary_key: true
+        shown: false
+        description: Surrogate Key
+        sql: sk
+        type: number
+
+      - name: model
+        title: Model
+        description: Attribution model identifier
+        sql: model
+        type: string
+
+      - name: display_name
+        title: Display Name
+        description: Human-readable attribution model name
+        sql: display_name
+        type: string
+
+    measures:
+      - name: count
+        title: Count
+        description: Number of attribution models
+        type: count
+        format: number
+
+    pre_aggregations:

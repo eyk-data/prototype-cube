@@ -1,0 +1,157 @@
+cubes:
+  - name: fact_daily_ads
+    title: Daily Ads
+    description: Daily ad performance metrics from advertising platforms
+    sql: SELECT * FROM { COMPILE_CONTEXT.securityContext.dataset }.fact_daily_ads
+
+    dimensions:
+      - name: ad_sk
+        title: Ad SK
+        primary_key: true
+        shown: false
+        description: Daily Ad Surrogate Key
+        sql: ad_sk
+        type: number
+
+      - name: date
+        title: Date
+        description: Date of the ad performance
+        sql: TIMESTAMP(date)
+        type: time
+
+      - name: source
+        title: Source
+        description: Ad platform source (google_ads, meta_ads, etc.)
+        sql: source
+        type: string
+
+      - name: campaign_id
+        title: Campaign ID
+        description: Campaign identifier
+        sql: campaign_id
+        type: string
+
+      - name: campaign_name
+        title: Campaign Name
+        description: Campaign name
+        sql: campaign_name
+        type: string
+
+      - name: campaign_objective_type
+        title: Campaign Objective
+        description: Campaign objective type
+        sql: campaign_objective_type
+        type: string
+
+      - name: ad_group_id
+        title: Ad Group ID
+        description: Ad group identifier
+        sql: ad_group_id
+        type: string
+
+      - name: ad_group_name
+        title: Ad Group Name
+        description: Ad group name
+        sql: ad_group_name
+        type: string
+
+      - name: ad_id
+        title: Ad ID
+        description: Ad identifier
+        sql: ad_id
+        type: string
+
+      - name: ad_name
+        title: Ad Name
+        description: Ad name
+        sql: ad_name
+        type: string
+
+      - name: ad_image_url
+        title: Ad Image URL
+        description: Ad image URL
+        sql: ad_image_url
+        type: string
+
+      - name: account_name
+        title: Account Name
+        description: Ad account name
+        sql: account_name
+        type: string
+
+      - name: currency
+        title: Currency
+        description: Currency of the ad spend
+        sql: currency
+        type: string
+
+    measures:
+      - name: impressions
+        title: Impressions
+        description: Total number of ad impressions
+        type: sum
+        sql: impressions
+        format: number
+
+      - name: clicks
+        title: Clicks
+        description: Total number of ad clicks
+        type: sum
+        sql: clicks
+        format: number
+
+      - name: cost
+        title: Ad Spend
+        description: Total ad spend
+        type: sum
+        sql: cost
+        format: currency
+
+      - name: revenue
+        title: Reported Revenue
+        description: Revenue as reported by the ad platform
+        type: sum
+        sql: revenue
+        format: currency
+
+      - name: orders
+        title: Reported Orders
+        description: Orders as reported by the ad platform
+        type: sum
+        sql: orders
+        format: number
+
+      - name: click_through_rate
+        title: CTR
+        description: Click-through rate (clicks / impressions)
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(impressions) = 0 THEN NULL
+            ELSE (SUM(clicks) / SUM(impressions)) * 100
+          END
+        format: percent
+
+      - name: cost_per_click
+        title: CPC
+        description: Cost per click
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(clicks) = 0 THEN NULL
+            ELSE SUM(cost) / SUM(clicks)
+          END
+        format: currency
+
+      - name: cost_per_mille
+        title: CPM
+        description: Cost per thousand impressions
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(impressions) = 0 THEN NULL
+            ELSE SUM(cost) / (SUM(impressions) / 1000)
+          END
+        format: currency
+
+    pre_aggregations:

@@ -1,0 +1,179 @@
+cubes:
+  - name: email_performance
+    title: Email performance
+    description: The Email performance model gives insight in the performance of your emailing campaigns
+    sql_table: "{ COMPILE_CONTEXT.securityContext.dataset }.email_performance"
+    data_source: default
+
+    joins: []
+
+    dimensions:
+      - name: source
+        title: Source
+        description: The platform where the data originates from
+        sql: source
+        type: string
+
+      - name: date
+        title: Date
+        description: The date of the results
+        sql: date
+        type: time
+
+      - name: flow
+        title: Flow
+        description: The name of the flow
+        sql: flow_name
+        type: string
+
+      - name: campaign
+        title: Campaign
+        description: The name of the campaign
+        sql: campaign_name
+        type: string
+
+    measures:
+      - name: received
+        title: Received
+        description: The number of received emails
+        type: sum
+        sql: received
+        format: number
+
+      - name: opened
+        title: Opened
+        description: The number of opened emails
+        type: sum
+        sql: opened
+        format: number
+
+      - name: unique_opened
+        title: Unique opened
+        description: The number of unique opened emails
+        type: sum
+        sql: unique_opened
+        format: number
+
+      - name: clicked
+        title: Clicked
+        description: The number of clicked emails
+        type: sum
+        sql: clicked
+        format: number
+
+      - name: unique_clicked
+        title: Unique clicked
+        description: The number of unique clicked emails
+        type: sum
+        sql: unique_clicked
+        format: number
+
+      - name: bounced
+        title: Bounced
+        description: The number of bounced emails
+        type: sum
+        sql: bounced
+        format: number
+
+      - name: unique_bounced
+        title: Unique bounced
+        description: The number of unique bounced emails
+        type: sum
+        sql: unique_bounced
+        format: number
+
+      - name: unsubscribed
+        title: Unsubscribed
+        description: The number of unsubscribed emails
+        type: sum
+        sql: unsubscribed
+        format: number
+
+      - name: unique_unsubscribed
+        title: Unique unsubscribed
+        description: The number of unique unsubscribed emails
+        type: sum
+        sql: unique_unsubscribed
+        format: number
+
+      - name: marked_as_spam
+        title: Marked as spam
+        description: The number of emails marked as spam
+        type: sum
+        sql: marked_as_spam
+        format: number
+
+      - name: unique_marked_as_spam
+        title: Unique marked as spam
+        description: The number of unique emails marked as spam
+        type: sum
+        sql: unique_marked_as_spam
+        format: number
+
+      - name: dropped
+        title: Dropped
+        description: The number of dropped emails
+        type: sum
+        sql: dropped
+        format: number
+
+      - name: unique_dropped
+        title: Unique dropped
+        description: The number of unique dropped emails
+        type: sum
+        sql: unique_dropped
+        format: number
+
+      - name: attributed_revenue
+        title: Revenue
+        description: The number of revenue
+        type: sum
+        sql: revenue
+        format: number
+
+      - name: attributed_orders
+        title: Orders
+        description: The number of orders
+        type: sum
+        sql: orders
+        format: number
+
+      # CALCULATED METRICS
+
+      - name: open_rate
+        title: Open rate
+        description: The percentage of opened mails
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(received) = 0 THEN NULL
+            ELSE (SUM(unique_opened) / SUM(received)) * 100
+          END
+        format: percent
+
+      - name: click_through_rate
+        title: Click through rate
+        description: The percentage of recipients who clicked after opening the email
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(unique_opened) = 0 THEN NULL
+            ELSE (SUM(unique_clicked) / SUM(unique_opened)) * 100
+          END
+        format: percent
+
+      - name: conversion_rate
+        title: Conversion rate
+        description: The percentage of recipients who made a purchase after receiving the email
+        type: number
+        sql: |
+          CASE
+            WHEN SUM(received) = 0 THEN NULL
+            ELSE (SUM(orders) / SUM(received)) * 100
+          END
+        format: percent
+
+    pre_aggregations:
+      # Pre-aggregation definitions go here.
+      # Learn more in the documentation: https://cube.dev/docs/caching/pre-aggregations/getting-started
+

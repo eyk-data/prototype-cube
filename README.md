@@ -1,64 +1,42 @@
+# Prototype: Self-hosted Cube (BigQuery)
 
-# Prototype: Cube.js multi-tenancy
+This repo provides a **local self-hosted Cube** setup that can replace the Embeddable (cloud) path. Cube connects to a **test GCP project** via a single **service account** and loads the **Cube models** pulled from the `eyk-analytics` repo.
 
-This is a prototype to prepare for the implementation of Embeddable in Eyk 🔥🔥
+## Layout
 
-Embeddable leverages Cube.js to power their caching layer. This is one of the strong points of Embeddable, because Cube.js is a well maintained & stable open-core project with a promising future.
+- **cube/** – Cube config and data models
+  - `cube.js` – BigQuery driver config, security context (dataset from JWT or env).
+  - `model/` – Cube YAML models (from eyk-analytics), use `COMPILE_CONTEXT.securityContext.dataset`.
+- **server/** – Backend that issues Cube JWTs (`/cube-token`) and tenant APIs.
+- **webapp/** – React app that calls the Cube API (and server for token).
 
-### Goals of the prototype, in decreasing order of priority
+## Running the prototype
 
-1. Dynamically load tenants (and their destinations) into the caching layer
-2. Implement basic authentication flow
-3. Fetch data from cube per tenant dynamically
-4. Load models per tenant dynamically
+### 1. GCP credentials
 
-And, of course, the prototype should be minimal in the sense that it just does what is required to reach the above goals, and nothing more.
+- Download the Service Account JSON key and save it as **`cube/gcp-credentials.json`** (this file is gitignored).
+- Ensure the BigQuery dataset and tables (e.g. from `eyk-transforms` / dbt) exist in that project.
 
-### Prototype overview
+### 2. Environment
 
-![authentication overview](images/cube-auth.png)
+```bash
+cp cube/.env.example cube/.env
+```
 
-- cube - caching layer, at startup unaware of the different tenants
-- server - backend server, holds the different tenants and the connection details of their destinations
-- webapp - uses the server to list tenants, allows to select a tenant, fetches data from cube for the selected tenant, then shows the data in the browser
-- destination1 - local postgres instance representing the datawarehouse for tenant1
-- destination2 - local postgres instance representing the datawarehouse for tenant2
+### 3. Start stack
 
-These are the most important files in this repo:
-- `cube/cube.py` - configuration for cube, defines how to handle context gotten from Json Web Token to connect to the different destinations per tenant
-- `server/main.py` - shows how to generate the jwt token that holds the context
-- `webapp/App.js` - shows how to create a cube client with a jwt token and fetch data from the cube service
-
-### Running the prototype
-
-1. Run the prototype with docker compose
 ```bash
 docker compose up
 ```
 
-2. Go to [http://localhost:3000](http://localhost:3000) in your browser
+- **Cube API**: http://localhost:4000
+- **Server**: http://localhost:8000 (tenants, `/cube-token`)
+- **Webapp**: http://localhost:3001
 
-3. Fetch the available tenants in the backend server by hitting the `List tenants from API` buttin
+The webapp is configured with `REACT_APP_USE_SELF_HOSTED_CUBE=true` and fetches a Cube JWT from `GET /cube-token`, then queries Cube for **paid_performance** and **ecommerce_attribution**.
 
-4. Switch between tenants in the drop down and see how the data is fetched from Cube, that in turn connects to the destination that belongs to the selected tenant dynamically based on the retrieved destination config
+## References
 
-### Open topics / questions
-
-- Will the implementation of `cube/cube.py` be handled on the Embeddable side or on the Eyk side?
-  - If handled on the Embeddable side:
-    - We want to pass in a list of data models to include. How will this work with your implementation of `repository_factory()`?
-    - What is the structure of the security context to include in the token? Example for BigQuery would help
-  - If implemented by Eyk, is the current set-up "optimal"?
-    - How to best set up default security context in `scheduled_refresh_contexts()`?
-    - How to deal with incomplete context passed in function calls, eg from default security context?
-    - Should we use a separate orchestrator per tenant? `context_to_orchestrator_id()`
-    - Anything missing?
-- Caching behavior configuration, some examples and best practices would help here
-
-### References
-
-These pages in the documentation helped understand cube and how to configure it:
-- https://cube.dev/docs/product/auth
-- https://cube.dev/docs/product/auth/context
-- https://cube.dev/docs/product/configuration/advanced/multitenancy (note: Embedddable works with COMPILE_CONTEXT, not query rewrite)
-- https://cube.dev/docs/reference/configuration/config
+- [Cube – Deploying with Docker](https://cube.dev/docs/product/deployment/core)
+- [Cube – Google BigQuery](https://cube.dev/docs/product/configuration/data-sources/google-bigquery)
+- [Cube – Security context](https://cube.dev/docs/product/auth/context)

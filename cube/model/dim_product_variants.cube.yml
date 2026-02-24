@@ -1,0 +1,163 @@
+cubes:
+  - name: dim_product_variants
+    title: Product Variants
+    description: Product variants dimension table
+    sql: SELECT * FROM { COMPILE_CONTEXT.securityContext.dataset }.dim_product_variants
+
+    dimensions:
+      - name: sk
+        primary_key: true
+        title: sk
+        description: Surrogate key for the product variant
+        sql: sk
+        type: number
+
+      - name: source
+        title: Source
+        description: The platform where the data originates from
+        sql: source
+        type: string
+
+      - name: store_id
+        title: Store ID
+        description: The id of the store
+        sql: store_id
+        type: string
+
+      - name: store_name
+        title: Store Name
+        description: The name of the store
+        sql: store_name
+        type: string
+
+      # VARIANTS
+
+      - name: variant_id
+        title: Variant ID
+        description: Product variant identifier
+        sql: variant_id
+        type: string
+
+      - name: variant_name
+        title: Variant Name
+        description: Name of the product variant
+        sql: variant_name
+        type: string
+
+      - name: variant_type
+        title: Variant Type
+        description: Type of the product variant
+        sql: variant_type
+        type: string
+
+      - name: variant_description
+        title: Variant Description
+        description: Description of the product variant
+        sql: variant_description
+        type: string
+
+      - name: variant_image_url
+        title: Variant Image URL
+        description: Image URL for the product variant
+        sql: variant_image_url
+        type: string
+
+      - name: variant_unit_cost
+        title: Variant Unit Cost
+        description: Unit cost of the product variant
+        sql: variant_cost
+        type: number
+
+      # PRODUCTS
+
+      - name: product_id
+        title: Product ID
+        description: Product identifier
+        sql: product_id
+        type: string
+
+      - name: product_name
+        title: Product Name (parent)
+        description: Name of the product
+        sql: product_name
+        type: string
+
+      - name: product_type
+        title: Product Type
+        description: Type of the product
+        sql: product_type
+        type: string
+
+      - name: product_description
+        title: Product Description
+        description: Description of the product
+        sql: product_description
+        type: string
+
+      - name: product_image_url
+        title: Product Image URL
+        description: Image URL for the product
+        sql: product_image_url
+        type: string
+
+      - name: product_unit_cost
+        title: Product Unit Cost
+        description: Unit cost of the product product
+        sql: "{CUBE}.product_cost"
+        type: number
+
+      # COMBINED FIELDS (PRODUCTS + VARIANTS)
+
+      - name: combined_sku
+        title: SKU
+        description: Stock keeping unit of the product
+        sql: COALESCE(variant_sku, product_sku)
+        type: string
+
+      - name: combined_price
+        title: Product Price
+        description: Price of the product
+        sql: COALESCE(variant_price, product_price)
+        type: number
+
+      - name: combined_cost
+        title: Product Cost
+        description: Unit cost of the product
+        sql: COALESCE(variant_cost, {CUBE}.product_unit_cost)
+        type: number
+
+      - name: combined_name
+        title: Product Name
+        description: Name of the product sold
+        sql: combined_name
+        type: string
+
+      - name: combined_image_url
+        title: Combined Image URL
+        description: Combination of product and variant image URL
+        sql: combined_image_url
+        type: string
+
+      - name: products_search_field
+        title: Search Field for Products
+        description: Search field, combination of product & variant fields
+        sql: products_search_field
+        type: string
+
+    measures:
+
+      - name: count_products
+        title: Count products
+        description: Total number of distinct products
+        type: count_distinct
+        sql: "{CUBE}.product_id"
+        format: number
+
+      - name: count_variants
+        title: Count variants
+        description: Total number of distinct variants
+        type: count_distinct
+        sql: "{CUBE}.variant_id"
+        format: number
+
+    pre_aggregations:

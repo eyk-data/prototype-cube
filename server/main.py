@@ -1,3 +1,4 @@
+import os
 import jwt
 from typing import Optional, List
 from contextlib import asynccontextmanager
@@ -5,6 +6,7 @@ from enum import Enum
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 
 from sqlmodel import (
     Field,
@@ -18,7 +20,8 @@ from sqlmodel import (
 )
 
 
-CUBE_API_SECRET = "apisecret"
+CUBE_API_SECRET = os.environ.get("CUBE_API_SECRET") or os.environ.get("CUBEJS_API_SECRET", "apisecret")
+CUBEJS_BQ_DATASET = os.environ.get("CUBEJS_BQ_DATASET", "")
 
 sqlite_file_name = "api.db"
 sqlite_url = f"sqlite:///{sqlite_file_name}"
@@ -185,3 +188,18 @@ def generate_jwt_token(tenant_id: int) -> str:
         }
         token = jwt.encode(token_payload, CUBE_API_SECRET, algorithm="HS256")
         return token
+
+
+@app.get("/cube-token", response_class=PlainTextResponse)
+def get_cube_token(dataset: Optional[str] = None) -> str:
+    """Return a JWT for self-hosted Cube (BigQuery). Payload includes dataset for COMPILE_CONTEXT.
+    Plain text response so the client gets the raw token, not JSON-wrapped."""
+    ds = (dataset or CUBEJS_BQ_DATASET or "").strip()
+    if not ds:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing dataset. Set CUBEJS_BQ_DATASET in cube/.env or pass ?dataset=...",
+        )
+    payload = {"dataset": ds}
+    token = jwt.encode(payload, CUBE_API_SECRET, algorithm="HS256")
+    return token

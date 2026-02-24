@@ -2,10 +2,16 @@ venv
 *.db
 __pycache__
 .DS_Store
+.env
 
-cube/*
-!cube/schema
+# Cube: keep config and model, ignore data and credentials
+cube/.cubestore
+cube/gcp-credentials.json
+cube/.env
+cube/*.log
+!cube/cube.js
 !cube/cube.py
+!cube/model
 
 webapp/node_modules
 webapp/package-lock.json
