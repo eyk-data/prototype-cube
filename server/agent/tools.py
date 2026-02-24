@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import List, Optional
 
 from langchain_core.tools import tool
 
 from .models import CubeFilter, CubeQuery, CubeTimeDimension
+
+logger = logging.getLogger(__name__)
 
 
 @tool
@@ -21,8 +24,11 @@ def cube_builder_tool(
     Args:
         measures: List of measure member names, e.g. ["fact_daily_ads.impressions"].
         dimensions: List of dimension member names, e.g. ["fact_daily_ads.source"].
-        time_dimensions: List of time dimension dicts with keys: dimension, granularity, dateRange.
-            Example: [{"dimension": "fact_daily_ads.date", "granularity": "month", "dateRange": "Last 6 months"}]
+        time_dimensions: List of time dimension dicts. Required key: dimension. Optional keys: granularity, dateRange.
+            Omit granularity for date filtering without time grouping (totals/rankings within a period).
+            Include granularity for trend-over-time queries.
+            Example (trend): [{"dimension": "fact_daily_ads.date", "granularity": "month", "dateRange": "Last 6 months"}]
+            Example (filter only): [{"dimension": "fact_sales_items.line_timestamp", "dateRange": "Last 30 days"}]
         filters: List of filter dicts with keys: member, operator, values.
             Example: [{"member": "fact_daily_ads.source", "operator": "equals", "values": ["google_ads"]}]
         order: Dict mapping member names to sort direction.
@@ -51,6 +57,7 @@ def cube_builder_tool(
             order=order,
             limit=limit,
         )
+        logger.info("CubeQuery built by tool:\n%s", query.model_dump_json(indent=2))
         return {"status": "ok", "query": query.to_cube_api_payload()}
     except Exception as exc:
         return {"status": "error", "message": str(exc)}

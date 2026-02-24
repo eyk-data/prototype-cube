@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import psycopg
 from psycopg.rows import dict_row
 import uuid
 from typing import Annotated, Optional
+
+logger = logging.getLogger(__name__)
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -153,6 +156,7 @@ async def specialist_node(state: AgentState) -> dict:
         tool_result = cube_builder_tool.invoke(tool_call["args"])
         if tool_result.get("status") == "ok":
             cube_query = tool_result["query"]
+            logger.info("CubeQuery from tool:\n%s", CubeQuery(**cube_query).model_dump_json(indent=2))
         else:
             return {
                 "cube_error": tool_result.get("message", "Tool validation failed"),
@@ -169,6 +173,7 @@ async def specialist_node(state: AgentState) -> dict:
                 TextBlock(content=response.content),
             ],
         )
+        logger.info("AnalyticsReport (text-only):\n%s", report.model_dump_json(indent=2))
         # Store the response as an AIMessage so the checkpointer persists it.
         # In subsequent turns, the specialist LLM sees the full conversation
         # (user questions + agent answers) and can handle follow-ups.
@@ -196,6 +201,7 @@ async def data_validator_node(state: AgentState) -> dict:
 
     try:
         query = CubeQuery(**raw_query) if isinstance(raw_query, dict) else raw_query
+        logger.info("CubeQuery for execution:\n%s", query.model_dump_json(indent=2))
         result = await cube_client.execute_cube_query(query)
         return {"cube_result": result, "cube_error": None}
     except Exception as exc:
@@ -239,6 +245,7 @@ async def formatter_node(state: AgentState) -> dict:
 
     structured_llm = llm.with_structured_output(FormatterDecision)
     decision: FormatterDecision = await structured_llm.ainvoke([system, user_msg])
+    logger.info("FormatterDecision:\n%s", decision.model_dump_json(indent=2))
 
     blocks = []
 
@@ -282,6 +289,7 @@ async def formatter_node(state: AgentState) -> dict:
         summary_title=decision.summary_title,
         blocks=blocks,
     )
+    logger.info("AnalyticsReport:\n%s", report.model_dump_json(indent=2))
     # Store the formatted response as an AIMessage so the checkpointer persists it.
     # In subsequent turns the LLM sees the full conversation (user questions +
     # agent answers) and can handle follow-ups like "what about last month?".
@@ -308,6 +316,7 @@ async def formatter_error_node(state: AgentState) -> dict:
         summary_title="Error",
         blocks=blocks,
     )
+    logger.info("AnalyticsReport (error):\n%s", report.model_dump_json(indent=2))
     # Persist the error response as an AIMessage so the conversation history
     # reflects that this turn failed — the user can see it and try again.
     ai_text = render_report_as_text(report)
