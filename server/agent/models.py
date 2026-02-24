@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Annotated, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
@@ -89,3 +90,62 @@ class AnalyticsReport(BaseModel):
     report_id: str
     summary_title: str
     blocks: List[AnalyticsBlock] = Field(default_factory=list)
+
+
+class FormatterDecision(BaseModel):
+    """LLM output: how to present the query results."""
+    summary_title: str
+    narrative: str
+    table_title: str
+    table_columns: List[str]
+    chart_type: Optional[Literal["line", "bar"]] = None
+    chart_title: Optional[str] = None
+    chart_x_or_category: Optional[str] = None
+    chart_y_or_value: Optional[str] = None
+
+
+def render_report_as_text(report: AnalyticsReport) -> str:
+    """Convert an AnalyticsReport into a plain-text (markdown) representation."""
+    parts: List[str] = []
+
+    parts.append(f"# {report.summary_title}\n")
+
+    for block in report.blocks:
+        if isinstance(block, ThoughtBlock):
+            parts.append(f"> **Thought:** {block.content}\n")
+        elif isinstance(block, TextBlock):
+            parts.append(f"{block.content}\n")
+        elif isinstance(block, LineChartBlock):
+            query_json = json.dumps(block.cube_query.to_cube_api_payload())
+            parts.append(
+                "---\n\n"
+                f"LineChartBlock(\n"
+                f"  title: \"{block.title}\"\n"
+                f"  x_axis_key: \"{block.x_axis_key}\"\n"
+                f"  y_axis_key: \"{block.y_axis_key}\"\n"
+                f"  cube_query: {query_json}\n"
+                f")\n"
+            )
+        elif isinstance(block, BarChartBlock):
+            query_json = json.dumps(block.cube_query.to_cube_api_payload())
+            parts.append(
+                "---\n\n"
+                f"BarChartBlock(\n"
+                f"  title: \"{block.title}\"\n"
+                f"  category_key: \"{block.category_key}\"\n"
+                f"  value_key: \"{block.value_key}\"\n"
+                f"  cube_query: {query_json}\n"
+                f")\n"
+            )
+        elif isinstance(block, TableBlock):
+            query_json = json.dumps(block.cube_query.to_cube_api_payload())
+            parts.append(
+                "---\n\n"
+                f"TableBlock(\n"
+                f"  title: \"{block.title}\"\n"
+                f"  columns: {json.dumps(block.columns)}\n"
+                f"  cube_query: {query_json}\n"
+                f")\n"
+            )
+
+    return "\n".join(parts)

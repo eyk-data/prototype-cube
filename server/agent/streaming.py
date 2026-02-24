@@ -7,6 +7,7 @@ from typing import AsyncGenerator
 from langchain_core.messages import HumanMessage
 
 from .graph import get_graph
+from .models import AnalyticsReport, render_report_as_text
 
 
 async def langgraph_to_datastream(
@@ -20,7 +21,7 @@ async def langgraph_to_datastream(
         e:{"finishReason":"stop"}\n      - finish step
         d:{"finishReason":"stop"}\n      - done
     """
-    graph = get_graph()
+    graph = await get_graph()
     message_id = str(uuid.uuid4())
 
     # Convert frontend messages to LangChain format
@@ -35,14 +36,12 @@ async def langgraph_to_datastream(
     config = {"configurable": {"thread_id": thread_id}}
     input_state = {"messages": lc_messages}
 
-    streamed_text = ""
-
     async for event in graph.astream(input_state, config=config, stream_mode="updates"):
         for node_name, node_output in event.items():
-            text = node_output.get("streamed_text")
-            if text and text != streamed_text:
-                streamed_text = text
-                # Stream word-by-word for smooth UI
+            report_data = node_output.get("analytics_report")
+            if report_data:
+                report = AnalyticsReport(**report_data)
+                text = render_report_as_text(report)
                 for word in text.split(" "):
                     yield f'0:{json.dumps(word + " ")}\n'
 

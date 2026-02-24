@@ -2,17 +2,29 @@ from __future__ import annotations
 
 import json
 import os
+import psycopg
+from psycopg.rows import dict_row
+import uuid
 from typing import Annotated, Optional
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.language_models.chat_models import BaseChatModel
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
 from . import cube_client
-from .models import CubeQuery
+from .models import (
+    AnalyticsReport,
+    BarChartBlock,
+    CubeQuery,
+    FormatterDecision,
+    LineChartBlock,
+    TableBlock,
+    TextBlock,
+    ThoughtBlock,
+)
 from .specialists import SPECIALISTS
 from .tools import cube_builder_tool
 
@@ -30,7 +42,8 @@ class AgentState(TypedDict):
     cube_result: Optional[dict]
     cube_error: Optional[str]
     retry_count: int
-    streamed_text: str
+    thought_log: list[str]
+    analytics_report: Optional[dict]
 
 
 # ---------------------------------------------------------------------------
@@ -86,12 +99,14 @@ async def router_node(state: AgentState) -> dict:
     if domain not in SPECIALISTS:
         domain = "marketing"
 
+    thought = f"Analyzing your question — routing to the {domain} analytics specialist."
     return {
         "specialist_domain": domain,
         "cube_query": None,
         "cube_result": None,
         "cube_error": None,
         "retry_count": 0,
+        "thought_log": [thought],
     }
 
 
@@ -134,10 +149,24 @@ async def specialist_node(state: AgentState) -> dict:
             }
 
     if cube_query is None:
-        # LLM didn't call the tool – use text response directly
-        return {"streamed_text": response.content, "cube_query": None}
+        # LLM didn't call the tool – build a minimal AnalyticsReport with text
+        report = AnalyticsReport(
+            report_id=str(uuid.uuid4()),
+            summary_title="Response",
+            blocks=[
+                *[ThoughtBlock(content=t) for t in state.get("thought_log", [])],
+                TextBlock(content=response.content),
+            ],
+        )
+        return {"analytics_report": report.model_dump(), "cube_query": None}
 
-    return {"cube_query": cube_query}
+    measures = cube_query.get("measures", [])
+    dims = cube_query.get("dimensions", [])
+    thought = f"Querying {', '.join(measures)} by {', '.join(dims) or 'total'}."
+    return {
+        "cube_query": cube_query,
+        "thought_log": state.get("thought_log", []) + [thought],
+    }
 
 
 async def data_validator_node(state: AgentState) -> dict:
@@ -158,7 +187,7 @@ async def data_validator_node(state: AgentState) -> dict:
 
 
 async def formatter_node(state: AgentState) -> dict:
-    """Generate a narrative summary from the query results."""
+    """Generate a structured AnalyticsReport from the query results."""
     llm = _get_llm()
     cube_result = state.get("cube_result", {})
     data = cube_result.get("data", [])
@@ -167,9 +196,12 @@ async def formatter_node(state: AgentState) -> dict:
     cube_query = state.get("cube_query", {})
     system = SystemMessage(
         content=(
-            "You are an analytics report writer. Given CubeJS query results, write a "
-            "clear, concise markdown narrative with key findings. Include specific numbers. "
-            "Do NOT wrap your response in code blocks. Just write the analysis directly."
+            "You are an analytics report formatter. Given CubeJS query results, decide "
+            "how to present them. Always include a table. Optionally include a chart:\n"
+            '- "line" when data has a time dimension with granularity (trend over time)\n'
+            '- "bar" when data has categorical dimensions with few groups (comparisons)\n'
+            "- null when only a narrative makes sense\n\n"
+            "Write a clear, concise narrative with key findings and specific numbers."
         )
     )
     user_msg = HumanMessage(
@@ -180,21 +212,66 @@ async def formatter_node(state: AgentState) -> dict:
         )
     )
 
-    response = await llm.ainvoke([system, user_msg])
-    return {"streamed_text": response.content}
+    structured_llm = llm.with_structured_output(FormatterDecision)
+    decision: FormatterDecision = await structured_llm.ainvoke([system, user_msg])
+
+    blocks = []
+
+    # ThoughtBlocks from accumulated log
+    for thought in state.get("thought_log", []):
+        blocks.append(ThoughtBlock(content=thought))
+
+    # TextBlock with narrative
+    blocks.append(TextBlock(content=decision.narrative))
+
+    # TableBlock (always)
+    blocks.append(TableBlock(
+        title=decision.table_title,
+        columns=decision.table_columns,
+        cube_query=CubeQuery(**cube_query),
+    ))
+
+    # Chart block (optional, based on LLM decision)
+    if decision.chart_type == "line":
+        blocks.append(LineChartBlock(
+            title=decision.chart_title or "Chart",
+            x_axis_key=decision.chart_x_or_category or "",
+            y_axis_key=decision.chart_y_or_value or "",
+            cube_query=CubeQuery(**cube_query),
+        ))
+    elif decision.chart_type == "bar":
+        blocks.append(BarChartBlock(
+            title=decision.chart_title or "Chart",
+            category_key=decision.chart_x_or_category or "",
+            value_key=decision.chart_y_or_value or "",
+            cube_query=CubeQuery(**cube_query),
+        ))
+
+    report = AnalyticsReport(
+        report_id=str(uuid.uuid4()),
+        summary_title=decision.summary_title,
+        blocks=blocks,
+    )
+    return {"analytics_report": report.model_dump()}
 
 
 async def formatter_error_node(state: AgentState) -> dict:
-    """Generate a user-friendly error message after retries are exhausted."""
+    """Generate an AnalyticsReport with error information after retries are exhausted."""
     cube_error = state.get("cube_error", "Unknown error")
-    return {
-        "streamed_text": (
-            "I wasn't able to retrieve the data for your question. "
-            f"The query failed after multiple attempts.\n\n**Error:** {cube_error}\n\n"
-            "This could be due to an invalid metric or dimension name. "
+    blocks = [ThoughtBlock(content=t) for t in state.get("thought_log", [])]
+    blocks.append(TextBlock(
+        content=(
+            f"I wasn't able to retrieve the data. **Error:** {cube_error}\n\n"
             "Could you try rephrasing your question?"
         )
-    }
+    ))
+
+    report = AnalyticsReport(
+        report_id=str(uuid.uuid4()),
+        summary_title="Error",
+        blocks=blocks,
+    )
+    return {"analytics_report": report.model_dump()}
 
 
 # ---------------------------------------------------------------------------
@@ -248,10 +325,22 @@ def build_workflow() -> StateGraph:
     return workflow
 
 
-_memory = MemorySaver()
+_memory: AsyncPostgresSaver | None = None
 
 
-def get_graph():
-    """Build and compile the graph with in-memory checkpointer for multi-turn."""
+async def _get_checkpointer() -> AsyncPostgresSaver:
+    global _memory
+    if _memory is None:
+        db_url = os.environ.get("DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/server")
+        # Strip SQLAlchemy dialect suffix for psycopg3 native connection
+        conn_string = db_url.replace("postgresql+psycopg://", "postgresql://")
+        conn = await psycopg.AsyncConnection.connect(conn_string, autocommit=True, row_factory=dict_row)
+        _memory = AsyncPostgresSaver(conn=conn)
+        await _memory.setup()
+    return _memory
+
+
+async def get_graph():
+    """Build and compile the graph with Postgres checkpointer for persistent multi-turn."""
     workflow = build_workflow()
-    return workflow.compile(checkpointer=_memory)
+    return workflow.compile(checkpointer=await _get_checkpointer())
