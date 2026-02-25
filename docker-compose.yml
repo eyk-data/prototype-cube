@@ -3,15 +3,13 @@ services:
     image: cubejs/cube:v0.36.0
     ports:
       - 4000:4000
-    environment:
-      - CUBEJS_DEV_MODE=true
-      # - CUBEJS_DB_TYPE=bigquery
-      # - CUBEJS_DB_BQ_KEY_FILE=/cube/conf/gcp-credentials.json
     volumes:
       - ./cube:/cube/conf
-    # env_file:
-    #   - ./cube/.env
+    env_file:
+      - ./cube/.env
     restart: on-failure
+    networks:
+      - eyk-django-network
 
   # eyk-cube-server:
   #   build: server
@@ -36,3 +34,5 @@ services:
       - REACT_APP_USE_SELF_HOSTED_CUBE=true
       - REACT_APP_SERVER_URL=http://localhost:8000
     restart: on-failure
+    networks:
+      - eyk-django-network
