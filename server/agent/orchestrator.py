@@ -465,19 +465,16 @@ async def run_analytics(
                     text_parts.append(block.spec.text_guidance)
             raw_guidance = " ".join(text_parts) if text_parts else plan.narrative_strategy
 
-            if plan.conversational_response:
-                combined_text = raw_guidance
-            else:
-                gen_prompt = (
-                    f"User's question: {user_question}\n\n"
-                    f"Conversation history:\n{conversation_history}\n\n"
-                    f"Report guidance: {raw_guidance}\n\n"
-                    "Write a clear, concise response that directly answers the user's question. "
-                    "Use specific numbers from the conversation history or guidance if available. "
-                    "Do not use markdown headers."
-                )
-                text_result = await text_gen_agent.run(gen_prompt, model=get_model())
-                combined_text = text_result.output.strip()
+            gen_prompt = (
+                f"User's question: {user_question}\n\n"
+                f"Conversation history:\n{conversation_history}\n\n"
+                f"Report guidance: {raw_guidance}\n\n"
+                "Write a clear, concise response that directly answers the user's question. "
+                "Use specific numbers from the conversation history or guidance if available. "
+                "Do not use markdown headers."
+            )
+            text_result = await text_gen_agent.run(gen_prompt, model=get_model())
+            combined_text = text_result.output.strip()
 
             report = _make_early_exit_report(
                 title=plan.summary_title,

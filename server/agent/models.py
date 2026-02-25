@@ -175,7 +175,6 @@ class ReportPlan(BaseModel):
     summary_title: str
     narrative_strategy: str  # How the blocks build on each other
     blocks: List[BlockPlan]
-    conversational_response: bool = False  # True when answering from conversation history
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +257,6 @@ class LLMReportPlan(BaseModel):
     summary_title: str
     narrative_strategy: str
     blocks: List[LLMBlockPlan]
-    conversational_response: bool = False
 
 
 def llm_plan_to_report_plan(raw: LLMReportPlan) -> ReportPlan:
@@ -268,7 +266,6 @@ def llm_plan_to_report_plan(raw: LLMReportPlan) -> ReportPlan:
         summary_title=raw.summary_title,
         narrative_strategy=raw.narrative_strategy,
         blocks=[b.to_block_plan() for b in raw.blocks],
-        conversational_response=raw.conversational_response,
     )
 
 
