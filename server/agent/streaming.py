@@ -1,12 +1,11 @@
+"""Bridge analytics orchestrator to Vercel AI SDK data stream protocol v1."""
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import AsyncGenerator
 
-from langchain_core.messages import HumanMessage
-
-from .graph import get_graph
 from .models import (
     AnalyticsReport,
     BarChartBlock,
@@ -14,7 +13,11 @@ from .models import (
     TableBlock,
     TextBlock,
     ThoughtBlock,
+    render_report_as_text,
 )
+from .orchestrator import run_analytics
+
+logger = logging.getLogger(__name__)
 
 
 def _tool_call_lines(tool_name: str, args: dict) -> list[str]:
@@ -49,7 +52,6 @@ def report_to_content_parts(report_data: dict) -> list[dict]:
             text_pieces.append(block.content + "\n\n")
 
         elif isinstance(block, LineChartBlock):
-            # Flush accumulated text before a tool-call
             if text_pieces:
                 parts.append({"type": "text", "text": "".join(text_pieces)})
                 text_pieces = []
@@ -113,10 +115,58 @@ def report_to_content_parts(report_data: dict) -> list[dict]:
     return parts
 
 
-async def langgraph_to_datastream(
-    messages: list[dict], thread_id: str
+def _stream_report_blocks(report: AnalyticsReport):
+    """Yield Vercel AI SDK lines for each block in a report."""
+    title_emitted = False
+
+    for block in report.blocks:
+        if isinstance(block, ThoughtBlock):
+            continue
+
+        elif isinstance(block, TextBlock):
+            if not title_emitted:
+                title_text = f"## {report.summary_title}\n\n"
+                for word in title_text.split(" "):
+                    yield f'0:{json.dumps(word + " ")}\n'
+                title_emitted = True
+            for word in block.content.split(" "):
+                yield f'0:{json.dumps(word + " ")}\n'
+            yield f'0:{json.dumps(chr(10) + chr(10))}\n'
+
+        elif isinstance(block, LineChartBlock):
+            args = {
+                "title": block.title,
+                "x_axis_key": block.x_axis_key,
+                "y_axis_key": block.y_axis_key,
+                "data": block.data or [],
+            }
+            for line in _tool_call_lines("chart_line", args):
+                yield line
+
+        elif isinstance(block, BarChartBlock):
+            args = {
+                "title": block.title,
+                "category_key": block.category_key,
+                "value_key": block.value_key,
+                "data": block.data or [],
+            }
+            for line in _tool_call_lines("chart_bar", args):
+                yield line
+
+        elif isinstance(block, TableBlock):
+            args = {
+                "title": block.title,
+                "columns": block.columns,
+                "data": block.data or [],
+            }
+            for line in _tool_call_lines("table", args):
+                yield line
+
+
+async def pydanticai_to_datastream(
+    messages: list[dict], thread_id: str, conversation_history: str = "",
 ) -> AsyncGenerator[str, None]:
-    """Bridge LangGraph execution to Vercel AI SDK data stream protocol v1.
+    """Bridge analytics orchestrator to Vercel AI SDK data stream protocol v1.
 
     Yields lines in the format:
         f:{"messageId":"..."}            - start frame
@@ -126,86 +176,58 @@ async def langgraph_to_datastream(
         e:{"finishReason":"stop"}        - finish step
         d:{"finishReason":"stop"}        - done
     """
-    graph = await get_graph()
     message_id = str(uuid.uuid4())
 
-    # The frontend sends the full message history per Vercel AI SDK convention,
-    # but we only need the latest user message. The LangGraph checkpointer
-    # maintains the full conversation state server-side — sending all messages
-    # would create duplicates because `add_messages` appends by ID and new
-    # HumanMessage objects get fresh IDs each time.
     user_messages = [msg for msg in messages if msg.get("role") == "user"]
     last_user = user_messages[-1] if user_messages else {"content": ""}
-    lc_messages = [HumanMessage(content=last_user["content"])]
+    content = last_user.get("content", "")
+    if isinstance(content, list):
+        text_parts = [
+            p.get("text", "") for p in content
+            if isinstance(p, dict) and p.get("type") == "text"
+        ]
+        content = " ".join(text_parts)
+    user_question = content if isinstance(content, str) else ""
 
     # Start frame
     yield f'f:{json.dumps({"messageId": message_id})}\n'
 
-    config = {"configurable": {"thread_id": thread_id}}
-    input_state = {"messages": lc_messages}
-    emitted_thought_count = 0
+    report: AnalyticsReport | None = None
 
-    async for event in graph.astream(input_state, config=config, stream_mode="updates"):
-        for node_name, node_output in event.items():
-            # Stream new thoughts incrementally as italic blockquotes
-            thought_log = node_output.get("thought_log")
-            if thought_log and isinstance(thought_log, list):
-                new_thoughts = thought_log[emitted_thought_count:]
-                for thought in new_thoughts:
-                    yield f'0:{json.dumps(f"> *{thought}*{chr(10)}{chr(10)}")}\n'
-                emitted_thought_count = len(thought_log)
+    async for tag, value in run_analytics(user_question, conversation_history):
+        if tag == "thought":
+            yield f'0:{json.dumps(f"> *{value}*{chr(10)}{chr(10)}")}\n'
+        elif tag == "report":
+            report = value
 
-            # Stream final report block-by-block
-            report_data = node_output.get("analytics_report")
-            if report_data:
-                report = AnalyticsReport(**report_data)
-                title_emitted = False
+    # Stream report blocks
+    if report:
+        for line in _stream_report_blocks(report):
+            yield line
 
-                for block in report.blocks:
-                    if isinstance(block, ThoughtBlock):
-                        # Already streamed incrementally above; skip duplicates
-                        continue
-
-                    elif isinstance(block, TextBlock):
-                        # Stream title before the first text block only
-                        if not title_emitted:
-                            title_text = f"## {report.summary_title}\n\n"
-                            for word in title_text.split(" "):
-                                yield f'0:{json.dumps(word + " ")}\n'
-                            title_emitted = True
-                        for word in block.content.split(" "):
-                            yield f'0:{json.dumps(word + " ")}\n'
-                        yield f'0:{json.dumps(chr(10) + chr(10))}\n'
-
-                    elif isinstance(block, LineChartBlock):
-                        args = {
-                            "title": block.title,
-                            "x_axis_key": block.x_axis_key,
-                            "y_axis_key": block.y_axis_key,
-                            "data": block.data or [],
-                        }
-                        for line in _tool_call_lines("chart_line", args):
-                            yield line
-
-                    elif isinstance(block, BarChartBlock):
-                        args = {
-                            "title": block.title,
-                            "category_key": block.category_key,
-                            "value_key": block.value_key,
-                            "data": block.data or [],
-                        }
-                        for line in _tool_call_lines("chart_bar", args):
-                            yield line
-
-                    elif isinstance(block, TableBlock):
-                        args = {
-                            "title": block.title,
-                            "columns": block.columns,
-                            "data": block.data or [],
-                        }
-                        for line in _tool_call_lines("table", args):
-                            yield line
+    # Store assistant message in ChatMessage table
+    if report:
+        _store_assistant_message(thread_id, report)
 
     # Finish + done events
     yield f'e:{json.dumps({"finishReason": "stop", "usage": {"promptTokens": 0, "completionTokens": 0}})}\n'
     yield f'd:{json.dumps({"finishReason": "stop", "usage": {"promptTokens": 0, "completionTokens": 0}})}\n'
+
+
+def _store_assistant_message(thread_id: str, report: AnalyticsReport) -> None:
+    """Persist the assistant's response as a ChatMessage row."""
+    from sqlmodel import Session
+    # Import engine from main — avoids circular import at module level
+    from server.main import engine, ChatMessage
+
+    ai_text = render_report_as_text(report)
+    report_dict = report.model_dump()
+
+    with Session(engine) as session:
+        session.add(ChatMessage(
+            thread_id=thread_id,
+            role="assistant",
+            content=ai_text,
+            report_data=report_dict,
+        ))
+        session.commit()

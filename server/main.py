@@ -22,7 +22,7 @@ from sqlmodel import (
     JSON,
 )
 
-from server.agent.streaming import langgraph_to_datastream, report_to_content_parts
+from server.agent.streaming import pydanticai_to_datastream, report_to_content_parts
 
 
 CUBE_API_SECRET = os.environ.get("CUBE_API_SECRET") or os.environ.get("CUBEJS_API_SECRET", "apisecret")
@@ -64,6 +64,15 @@ class Chat(SQLModel, table=True):
     title: str = Field(default="New Chat")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ChatMessage(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    thread_id: str = Field(index=True)
+    role: str  # "user" or "assistant"
+    content: str = ""
+    report_data: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 def setup():
@@ -231,28 +240,27 @@ def list_chats():
 
 
 @app.get("/api/chats/{thread_id}/messages")
-async def get_chat_messages(thread_id: str):
-    from langchain_core.messages import HumanMessage, AIMessage
-    from server.agent.graph import get_graph
+def get_chat_messages(thread_id: str):
+    with Session(engine) as session:
+        msgs = session.exec(
+            select(ChatMessage)
+            .where(ChatMessage.thread_id == thread_id)
+            .order_by(ChatMessage.created_at)
+        ).all()
 
-    graph = await get_graph()
-    config = {"configurable": {"thread_id": thread_id}}
-    state = await graph.aget_state(config)
-
-    if not state.values:
+    if not msgs:
         raise HTTPException(status_code=404, detail="Thread not found")
 
     result = []
-    for msg in state.values.get("messages", []):
-        if isinstance(msg, HumanMessage):
-            result.append({"id": msg.id, "role": "user", "content": msg.content})
-        elif isinstance(msg, AIMessage):
-            report_data = msg.additional_kwargs.get("analytics_report")
-            if report_data:
-                content_parts = report_to_content_parts(report_data)
-                result.append({"id": msg.id, "role": "assistant", "content": content_parts})
+    for msg in msgs:
+        if msg.role == "user":
+            result.append({"id": str(msg.id), "role": "user", "content": msg.content})
+        elif msg.role == "assistant":
+            if msg.report_data:
+                content_parts = report_to_content_parts(msg.report_data)
+                result.append({"id": str(msg.id), "role": "assistant", "content": content_parts})
             else:
-                result.append({"id": msg.id, "role": "assistant", "content": msg.content})
+                result.append({"id": str(msg.id), "role": "assistant", "content": msg.content})
     return result
 
 
@@ -264,6 +272,7 @@ def delete_chat(thread_id: str):
         ).first()
         if not chat:
             raise HTTPException(status_code=404, detail="Chat not found")
+        session.exec(delete(ChatMessage).where(ChatMessage.thread_id == thread_id))
         session.delete(chat)
         session.commit()
         return {"ok": True}
@@ -274,13 +283,64 @@ def delete_chat(thread_id: str):
 # ---------------------------------------------------------------------------
 
 
+def _extract_content_text(content) -> str:
+    """Extract text from AI SDK content (string or content parts array)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_parts = [
+            p.get("text", "") for p in content
+            if isinstance(p, dict) and p.get("type") == "text"
+        ]
+        return " ".join(text_parts)
+    return ""
+
+
+def _build_conversation_history(
+    thread_id: str, max_messages: int = 10, exclude_last: bool = False,
+) -> str:
+    """Load recent ChatMessage rows for a thread and format as history string."""
+    limit = max_messages + 1 if exclude_last else max_messages
+    with Session(engine) as session:
+        msgs = session.exec(
+            select(ChatMessage)
+            .where(ChatMessage.thread_id == thread_id)
+            .order_by(ChatMessage.created_at.desc())
+            .limit(limit)
+        ).all()
+
+    if not msgs:
+        return ""
+
+    # Reverse to chronological order
+    msgs = list(reversed(msgs))
+    if exclude_last:
+        msgs = msgs[:-1]  # drop the most recently stored message
+
+    parts = []
+    for msg in msgs:
+        if msg.role == "user":
+            parts.append(f"User: {msg.content}")
+        elif msg.role == "assistant":
+            content = msg.content
+            if len(content) > 1500:
+                content = content[:1500] + "... [truncated]"
+            parts.append(f"Assistant: {content}")
+    return "\n\n".join(parts)
+
+
 @app.post("/api/chat")
 async def chat(request: Request):
     body = await request.json()
     messages = body.get("messages", [])
     thread_id = body.get("thread_id") or str(uuid.uuid4())
 
-    # Create or update Chat record
+    # Extract user message text
+    user_messages = [msg for msg in messages if msg.get("role") == "user"]
+    last_user = user_messages[-1] if user_messages else {"content": ""}
+    user_text = _extract_content_text(last_user.get("content", ""))
+
+    # Create or update Chat record + store user message
     with Session(engine) as session:
         existing = session.exec(
             select(Chat).where(Chat.thread_id == thread_id)
@@ -288,26 +348,25 @@ async def chat(request: Request):
         if existing:
             existing.updated_at = datetime.utcnow()
             session.add(existing)
-            session.commit()
         else:
-            # Use first user message as title.
-            # AI SDK sends content as either a string or an array of
-            # content parts like [{"type": "text", "text": "..."}].
-            title = "New Chat"
-            if messages:
-                last_msg = messages[-1]
-                content = last_msg.get("content", "")
-                if isinstance(content, list):
-                    text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
-                    content = " ".join(text_parts)
-                if isinstance(content, str) and content:
-                    title = content[:100]
+            title = user_text[:100] if user_text else "New Chat"
             chat_record = Chat(thread_id=thread_id, title=title)
             session.add(chat_record)
-            session.commit()
+
+        # Store user message
+        session.add(ChatMessage(
+            thread_id=thread_id,
+            role="user",
+            content=user_text,
+        ))
+        session.commit()
+
+    # Build conversation history from stored messages excluding the message
+    # we just stored (the current user question is passed separately).
+    conversation_history = _build_conversation_history(thread_id, exclude_last=True)
 
     return StreamingResponse(
-        langgraph_to_datastream(messages, thread_id),
+        pydanticai_to_datastream(messages, thread_id, conversation_history),
         media_type="text/plain; charset=utf-8",
         headers={
             "x-vercel-ai-data-stream": "v1",
