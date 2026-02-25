@@ -61,6 +61,7 @@ def report_to_content_parts(report_data: dict) -> list[dict]:
                 "toolCallId": call_id,
                 "toolName": "chart_line",
                 "args": {
+                    "type": "chart_line",
                     "title": block.title,
                     "x_axis_key": block.x_axis_key,
                     "y_axis_key": block.y_axis_key,
@@ -79,6 +80,7 @@ def report_to_content_parts(report_data: dict) -> list[dict]:
                 "toolCallId": call_id,
                 "toolName": "chart_bar",
                 "args": {
+                    "type": "chart_bar",
                     "title": block.title,
                     "category_key": block.category_key,
                     "value_key": block.value_key,
@@ -97,6 +99,7 @@ def report_to_content_parts(report_data: dict) -> list[dict]:
                 "toolCallId": call_id,
                 "toolName": "table",
                 "args": {
+                    "type": "table",
                     "title": block.title,
                     "columns": block.columns,
                     "data": block.data or [],
@@ -135,6 +138,7 @@ def _stream_report_blocks(report: AnalyticsReport):
 
         elif isinstance(block, LineChartBlock):
             args = {
+                "type": "chart_line",
                 "title": block.title,
                 "x_axis_key": block.x_axis_key,
                 "y_axis_key": block.y_axis_key,
@@ -145,6 +149,7 @@ def _stream_report_blocks(report: AnalyticsReport):
 
         elif isinstance(block, BarChartBlock):
             args = {
+                "type": "chart_bar",
                 "title": block.title,
                 "category_key": block.category_key,
                 "value_key": block.value_key,
@@ -155,6 +160,7 @@ def _stream_report_blocks(report: AnalyticsReport):
 
         elif isinstance(block, TableBlock):
             args = {
+                "type": "table",
                 "title": block.title,
                 "columns": block.columns,
                 "data": block.data or [],

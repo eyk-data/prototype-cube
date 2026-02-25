@@ -179,31 +179,81 @@ class ReportPlan(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# LLM-facing models (flat schema, Vertex AI compatible — no discriminated unions)
+# LLM-facing plan models (extend BlockSpec, adding planning metadata)
 # ---------------------------------------------------------------------------
 
-class LLMBlockPlan(BaseModel):
-    """Flat block plan for LLM structured output. Converted to typed BlockPlan after parsing."""
+class LLMTextBlockPlan(TextBlockSpec):
+    """LLM plan output for a text block."""
+    type: Literal["text"]  # no default → required in schema
     block_id: str
-    block_type: Literal["text", "chart_line", "chart_bar", "table"]
     purpose: str
-    # Text blocks
-    text_guidance: Optional[str] = None
-    # Data blocks — shared
-    title: Optional[str] = None
-    query: Optional[QuerySpec] = None
-    # Line chart
-    x_axis_key: Optional[str] = None
-    y_axis_key: Optional[str] = None
-    # Bar chart
-    category_key: Optional[str] = None
-    value_key: Optional[str] = None
-    # Table
-    columns: Optional[List[str]] = None
+
+    def to_block_plan(self) -> BlockPlan:
+        return BlockPlan(
+            block_id=self.block_id,
+            purpose=self.purpose,
+            spec=TextBlockSpec(text_guidance=self.text_guidance),
+        )
+
+
+class LLMLineChartBlockPlan(LineChartBlockSpec):
+    """LLM plan output for a line chart block."""
+    type: Literal["chart_line"]  # no default → required in schema
+    block_id: str
+    purpose: str
+
+    def to_block_plan(self) -> BlockPlan:
+        return BlockPlan(
+            block_id=self.block_id,
+            purpose=self.purpose,
+            spec=LineChartBlockSpec(
+                title=self.title, x_axis_key=self.x_axis_key,
+                y_axis_key=self.y_axis_key, query=self.query,
+            ),
+        )
+
+
+class LLMBarChartBlockPlan(BarChartBlockSpec):
+    """LLM plan output for a bar chart block."""
+    type: Literal["chart_bar"]  # no default → required in schema
+    block_id: str
+    purpose: str
+
+    def to_block_plan(self) -> BlockPlan:
+        return BlockPlan(
+            block_id=self.block_id,
+            purpose=self.purpose,
+            spec=BarChartBlockSpec(
+                title=self.title, category_key=self.category_key,
+                value_key=self.value_key, query=self.query,
+            ),
+        )
+
+
+class LLMTableBlockPlan(TableBlockSpec):
+    """LLM plan output for a table block."""
+    type: Literal["table"]  # no default → required in schema
+    block_id: str
+    purpose: str
+
+    def to_block_plan(self) -> BlockPlan:
+        return BlockPlan(
+            block_id=self.block_id,
+            purpose=self.purpose,
+            spec=TableBlockSpec(
+                title=self.title, columns=self.columns, query=self.query,
+            ),
+        )
+
+
+LLMBlockPlan = Annotated[
+    Union[LLMTextBlockPlan, LLMLineChartBlockPlan, LLMBarChartBlockPlan, LLMTableBlockPlan],
+    Field(discriminator="type"),
+]
 
 
 class LLMReportPlan(BaseModel):
-    """Flat report plan for LLM structured output. Converted to typed ReportPlan after parsing."""
+    """Report plan for LLM structured output. Converted to typed ReportPlan after parsing."""
     domain: Literal["marketing", "sales"]
     summary_title: str
     narrative_strategy: str
@@ -212,39 +262,12 @@ class LLMReportPlan(BaseModel):
 
 
 def llm_plan_to_report_plan(raw: LLMReportPlan) -> ReportPlan:
-    """Convert flat LLM output to typed ReportPlan with discriminated BlockSpecs."""
-    blocks: List[BlockPlan] = []
-    for b in raw.blocks:
-        spec: TextBlockSpec | LineChartBlockSpec | BarChartBlockSpec | TableBlockSpec
-        if b.block_type == "text":
-            spec = TextBlockSpec(text_guidance=b.text_guidance)
-        elif b.block_type == "chart_line":
-            spec = LineChartBlockSpec(
-                title=b.title or "",
-                x_axis_key=b.x_axis_key or "",
-                y_axis_key=b.y_axis_key or "",
-                query=b.query,
-            )
-        elif b.block_type == "chart_bar":
-            spec = BarChartBlockSpec(
-                title=b.title or "",
-                category_key=b.category_key or "",
-                value_key=b.value_key or "",
-                query=b.query,
-            )
-        elif b.block_type == "table":
-            spec = TableBlockSpec(
-                title=b.title or "",
-                columns=b.columns or [],
-                query=b.query,
-            )
-        blocks.append(BlockPlan(block_id=b.block_id, purpose=b.purpose, spec=spec))
-
+    """Convert LLM output to typed ReportPlan with discriminated BlockSpecs."""
     return ReportPlan(
         domain=raw.domain,
         summary_title=raw.summary_title,
         narrative_strategy=raw.narrative_strategy,
-        blocks=blocks,
+        blocks=[b.to_block_plan() for b in raw.blocks],
         conversational_response=raw.conversational_response,
     )
 

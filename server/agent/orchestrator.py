@@ -446,7 +446,7 @@ async def run_analytics(
                 user_question, conversation_history, deps, review_result,
             )
         except Exception as exc:
-            logger.warning("Planner failed: %s", exc)
+            logger.exception("Planner failed: %s", exc)
             report = _make_early_exit_report(
                 title="Response",
                 text="I wasn't able to plan a report for this question. Could you try rephrasing?",
