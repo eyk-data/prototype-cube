@@ -22,7 +22,7 @@ from sqlmodel import (
     JSON,
 )
 
-from app.agent.streaming import langgraph_to_datastream
+from server.agent.streaming import langgraph_to_datastream
 
 
 CUBE_API_SECRET = os.environ.get("CUBE_API_SECRET") or os.environ.get("CUBEJS_API_SECRET", "apisecret")
@@ -233,7 +233,7 @@ def list_chats():
 @app.get("/api/chats/{thread_id}/messages")
 async def get_chat_messages(thread_id: str):
     from langchain_core.messages import HumanMessage, AIMessage
-    from app.agent.graph import get_graph
+    from server.agent.graph import get_graph
 
     graph = await get_graph()
     config = {"configurable": {"thread_id": thread_id}}

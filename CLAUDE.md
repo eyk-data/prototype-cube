@@ -8,11 +8,22 @@ A prototype for Cube.js multi-tenancy, demonstrating dynamic tenant loading with
 
 ## Running the Prototype
 
-Everything runs via Docker Compose:
+### Full Docker (all services)
 ```bash
 docker compose up
 ```
-- Webapp: http://localhost:3000
+
+### Local Development (recommended for server/webapp changes)
+```bash
+make dev-setup    # One-time: create .venv, install Python + Node deps
+make dev-infra    # Start PostgreSQL + Cube in Docker (background)
+make dev-server   # Run FastAPI with hot-reload on port 8000
+make dev-webapp   # Run React dev server on port 3001
+make dev-stop     # Stop Docker infrastructure
+```
+
+**Ports:**
+- Webapp: http://localhost:3001 (local dev) / http://localhost:3000 (Docker)
 - Server API: http://localhost:8000
 - Cube playground: http://localhost:4000
 
@@ -63,10 +74,10 @@ Flow:
 
 ## Verifying Changes
 
-Always test locally first before Docker builds — it's much faster:
-- **Webapp**: Run `cd webapp && npx react-scripts build` to check for compile errors (missing modules, syntax errors, bad imports). No need to `docker compose build` for quick validation.
-- **Server**: Run `python -m py_compile server/agent/<file>.py` to syntax-check Python files. Server dependencies (langchain, etc.) are Docker-only, so full imports won't work locally, but `py_compile` catches syntax issues.
-- **Docker**: Only use `docker compose build && docker compose up` for end-to-end integration testing after local checks pass. Use `--no-cache` on the specific service if you suspect layer caching issues (e.g., `docker compose build --no-cache webapp`).
+Use the local dev workflow for fast iteration:
+- **Server**: Run `make dev-server` for hot-reloading. For quick syntax checks without starting the server: `python -m py_compile server/agent/<file>.py`.
+- **Webapp**: Run `make dev-webapp` for hot-reloading. For build checks: `cd webapp && npx react-scripts build`.
+- **Docker**: Only use `docker compose build && docker compose up` for end-to-end integration testing. Use `--no-cache` on a specific service if you suspect layer caching issues (e.g., `docker compose build --no-cache webapp`).
 
 ## Planning & Verification Discipline
 

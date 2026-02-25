@@ -34,7 +34,7 @@ services:
     depends_on:
       - server-db
     volumes:
-      - ./server:/code/app
+      - ./server:/code/server
       - ./server/gcp-credentials.json:/code/gcp-credentials.json:ro
     env_file:
       - ./cube/.env
