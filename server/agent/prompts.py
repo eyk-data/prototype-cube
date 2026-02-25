@@ -1,4 +1,4 @@
-"""Prompt constants and builder for the analytics planner agent."""
+"""Prompt constants and builder for the analytics agents."""
 from __future__ import annotations
 
 import json
@@ -87,7 +87,11 @@ SALES_INSTRUCTIONS = (
     "Pay close attention to the Query Construction Rules for when to include or omit granularity in time dimensions."
 )
 
-_STATIC_SYSTEM_PROMPT = (
+# ---------------------------------------------------------------------------
+# Agent identity constants (static instructions at agent construction)
+# ---------------------------------------------------------------------------
+
+PLANNER_IDENTITY = (
     "You are an analytics report planner. Your job is to design a structured report "
     "that best answers the user's question with appropriate data visualizations.\n\n"
 
@@ -146,28 +150,43 @@ _STATIC_SYSTEM_PROMPT = (
     + FEW_SHOT_EXAMPLES
 )
 
+REVIEWER_IDENTITY = (
+    "You are a quality reviewer for analytics reports. Evaluate whether the "
+    "executed report blocks adequately answer the user's question."
+)
 
-def build_planner_system_prompt(
-    cube_meta: str,
+TEXT_GEN_IDENTITY = "You are a helpful analytics assistant."
+
+QUERY_CORRECTOR_IDENTITY = (
+    "You are a Cube query correction assistant. Fix failed queries based on "
+    "the error message and available cube metadata."
+)
+
+
+# ---------------------------------------------------------------------------
+# User prompt builder (history + revision feedback)
+# ---------------------------------------------------------------------------
+
+
+def build_planner_user_prompt(
+    user_question: str,
     history: str,
     revision_feedback: dict | None = None,
 ) -> str:
-    """Assemble the full planner system prompt.
+    """Assemble the planner user prompt with conversation context.
 
     Args:
-        cube_meta: Formatted cube metadata string.
+        user_question: The user's current question.
         history: Formatted conversation history string.
         revision_feedback: If revising, the review_result dict with 'issues' and
             'revision_instructions' keys.
     """
-    parts = [
-        _STATIC_SYSTEM_PROMPT,
-        "## Cube Metadata\n",
-        cube_meta,
-        "\n\n",
-        "## Conversation History\n",
-        history,
-    ]
+    parts: list[str] = []
+
+    if history:
+        parts.append(f"## Conversation History\n{history}\n\n")
+
+    parts.append(f"User question: {user_question}")
 
     if revision_feedback:
         issues = revision_feedback.get("issues", [])
