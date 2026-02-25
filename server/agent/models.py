@@ -99,19 +99,14 @@ class AnalyticsReport(BaseModel):
 # Planner models (plan-execute-review architecture)
 # ---------------------------------------------------------------------------
 
-class BlockQuerySpec(BaseModel):
-    """Query parameters for a single data block. The planner fills these out using cube metadata."""
+class QuerySpec(BaseModel):
+    """Pure query parameters for a Cube.js request."""
     measures: List[str]
     dimensions: List[str] = Field(default_factory=list)
     time_dimensions: Optional[List[CubeTimeDimension]] = None
     filters: Optional[List[CubeFilter]] = None
     order: Optional[dict[str, str]] = None
     limit: Optional[int] = None
-    # Visualization config
-    title: str
-    x_or_category_key: Optional[str] = None  # For charts: the x-axis / category key
-    y_or_value_key: Optional[str] = None      # For charts: the y-axis / value key
-    columns: Optional[List[str]] = None       # For tables: which columns to display
 
     @field_validator("limit", mode="before")
     @classmethod
@@ -129,13 +124,49 @@ class BlockQuerySpec(BaseModel):
         return v if v else None
 
 
+# ---------------------------------------------------------------------------
+# Typed block specs (discriminated union for planner output)
+# ---------------------------------------------------------------------------
+
+class TextBlockSpec(BaseModel):
+    type: Literal["text"] = "text"
+    text_guidance: Optional[str] = None
+
+
+class LineChartBlockSpec(BaseModel):
+    type: Literal["chart_line"] = "chart_line"
+    title: str
+    x_axis_key: str
+    y_axis_key: str
+    query: QuerySpec
+
+
+class BarChartBlockSpec(BaseModel):
+    type: Literal["chart_bar"] = "chart_bar"
+    title: str
+    category_key: str
+    value_key: str
+    query: QuerySpec
+
+
+class TableBlockSpec(BaseModel):
+    type: Literal["table"] = "table"
+    title: str
+    columns: List[str]
+    query: QuerySpec
+
+
+BlockSpec = Annotated[
+    Union[TextBlockSpec, LineChartBlockSpec, BarChartBlockSpec, TableBlockSpec],
+    Field(discriminator="type"),
+]
+
+
 class BlockPlan(BaseModel):
     """A single planned block in the report."""
     block_id: str  # e.g. "block_1"
-    block_type: Literal["text", "chart_line", "chart_bar", "table"]
     purpose: str   # Why this block exists, what insight it conveys
-    query_spec: Optional[BlockQuerySpec] = None  # None for text blocks
-    text_guidance: Optional[str] = None          # For text blocks: what to write about
+    spec: BlockSpec
 
 
 class ReportPlan(BaseModel):
@@ -147,11 +178,82 @@ class ReportPlan(BaseModel):
     conversational_response: bool = False  # True when answering from conversation history
 
 
+# ---------------------------------------------------------------------------
+# LLM-facing models (flat schema, Vertex AI compatible — no discriminated unions)
+# ---------------------------------------------------------------------------
+
+class LLMBlockPlan(BaseModel):
+    """Flat block plan for LLM structured output. Converted to typed BlockPlan after parsing."""
+    block_id: str
+    block_type: Literal["text", "chart_line", "chart_bar", "table"]
+    purpose: str
+    # Text blocks
+    text_guidance: Optional[str] = None
+    # Data blocks — shared
+    title: Optional[str] = None
+    query: Optional[QuerySpec] = None
+    # Line chart
+    x_axis_key: Optional[str] = None
+    y_axis_key: Optional[str] = None
+    # Bar chart
+    category_key: Optional[str] = None
+    value_key: Optional[str] = None
+    # Table
+    columns: Optional[List[str]] = None
+
+
+class LLMReportPlan(BaseModel):
+    """Flat report plan for LLM structured output. Converted to typed ReportPlan after parsing."""
+    domain: Literal["marketing", "sales"]
+    summary_title: str
+    narrative_strategy: str
+    blocks: List[LLMBlockPlan]
+    conversational_response: bool = False
+
+
+def llm_plan_to_report_plan(raw: LLMReportPlan) -> ReportPlan:
+    """Convert flat LLM output to typed ReportPlan with discriminated BlockSpecs."""
+    blocks: List[BlockPlan] = []
+    for b in raw.blocks:
+        spec: TextBlockSpec | LineChartBlockSpec | BarChartBlockSpec | TableBlockSpec
+        if b.block_type == "text":
+            spec = TextBlockSpec(text_guidance=b.text_guidance)
+        elif b.block_type == "chart_line":
+            spec = LineChartBlockSpec(
+                title=b.title or "",
+                x_axis_key=b.x_axis_key or "",
+                y_axis_key=b.y_axis_key or "",
+                query=b.query,
+            )
+        elif b.block_type == "chart_bar":
+            spec = BarChartBlockSpec(
+                title=b.title or "",
+                category_key=b.category_key or "",
+                value_key=b.value_key or "",
+                query=b.query,
+            )
+        elif b.block_type == "table":
+            spec = TableBlockSpec(
+                title=b.title or "",
+                columns=b.columns or [],
+                query=b.query,
+            )
+        blocks.append(BlockPlan(block_id=b.block_id, purpose=b.purpose, spec=spec))
+
+    return ReportPlan(
+        domain=raw.domain,
+        summary_title=raw.summary_title,
+        narrative_strategy=raw.narrative_strategy,
+        blocks=blocks,
+        conversational_response=raw.conversational_response,
+    )
+
+
 class ExecutedBlock(BaseModel):
     """A block after execution — query ran, data attached."""
     block_id: str
     block_plan: BlockPlan
-    cube_query: Optional[dict] = None
+    cube_query: Optional[CubeQuery] = None
     data: Optional[List[dict]] = None
     error: Optional[str] = None
     text_content: Optional[str] = None  # For text blocks

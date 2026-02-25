@@ -25,18 +25,24 @@ from .cube_meta import get_cube_meta_context, get_valid_member_names
 from .models import (
     AnalyticsReport,
     BarChartBlock,
+    BarChartBlockSpec,
     BlockPlan,
-    BlockQuerySpec,
     CubeQuery,
     CubeFilter,
     CubeTimeDimension,
     ExecutedBlock,
+    LLMReportPlan,
     LineChartBlock,
+    LineChartBlockSpec,
+    QuerySpec,
     ReportPlan,
     ReviewResult,
     TableBlock,
+    TableBlockSpec,
     TextBlock,
+    TextBlockSpec,
     ThoughtBlock,
+    llm_plan_to_report_plan,
     render_report_as_text,
 )
 from .prompts import build_planner_system_prompt
@@ -110,24 +116,14 @@ def _get_llm() -> BaseChatModel:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _build_cube_query(spec: BlockQuerySpec) -> CubeQuery | None:
-    """Convert a BlockQuerySpec into a validated CubeQuery, or None on error."""
+def _build_cube_query(spec: QuerySpec) -> CubeQuery | None:
+    """Convert a QuerySpec into a validated CubeQuery, or None on error."""
     try:
-        td_models = (
-            [CubeTimeDimension(**td.model_dump(exclude_none=True)) for td in spec.time_dimensions]
-            if spec.time_dimensions
-            else []
-        )
-        filter_models = (
-            [CubeFilter(**f.model_dump(exclude_none=True)) for f in spec.filters]
-            if spec.filters
-            else []
-        )
         query = CubeQuery(
             measures=spec.measures,
             dimensions=spec.dimensions,
-            timeDimensions=td_models,
-            filters=filter_models,
+            timeDimensions=spec.time_dimensions or [],
+            filters=spec.filters or [],
             order=spec.order,
             limit=spec.limit,
         )
@@ -208,20 +204,20 @@ async def _llm_correct_query(
     failed_query: CubeQuery,
     error_msg: str,
     cube_meta_context: str,
-) -> BlockQuerySpec | None:
+) -> QuerySpec | None:
     """Ask the LLM to fix a failed Cube query. Returns corrected spec or None."""
     llm = _get_llm()
     correction_prompt = (
         "A Cube query failed. Fix the query based on the error and metadata.\n\n"
         f"Block purpose: {block_plan.purpose}\n"
-        f"Block type: {block_plan.block_type}\n\n"
+        f"Block type: {block_plan.spec.type}\n\n"
         f"Failed query:\n{failed_query.model_dump_json(indent=2)}\n\n"
         f"Error:\n{error_msg}\n\n"
         f"Cube metadata:\n{cube_meta_context}\n\n"
-        "Return a corrected BlockQuerySpec. Use only valid member names from the metadata."
+        "Return a corrected QuerySpec. Use only valid member names from the metadata."
     )
     try:
-        corrected: BlockQuerySpec = await llm.with_structured_output(BlockQuerySpec).ainvoke(
+        corrected: QuerySpec = await llm.with_structured_output(QuerySpec).ainvoke(
             [HumanMessage(content=correction_prompt)]
         )
         return corrected
@@ -237,28 +233,29 @@ def _validate_plan_members(plan: ReportPlan, valid_members: set[str]) -> list[st
     """
     errors: list[str] = []
     for block in plan.blocks:
-        spec = block.query_spec
-        if not spec:
+        spec = block.spec
+        if isinstance(spec, TextBlockSpec):
             continue
+        query = spec.query
         prefix = f"Block {block.block_id}"
-        for m in spec.measures:
+        for m in query.measures:
             if m not in valid_members:
                 errors.append(f"{prefix}: invalid measure '{m}'")
-        for d in spec.dimensions:
+        for d in query.dimensions:
             if d not in valid_members:
                 errors.append(f"{prefix}: invalid dimension '{d}'")
-        if spec.time_dimensions:
-            for td in spec.time_dimensions:
+        if query.time_dimensions:
+            for td in query.time_dimensions:
                 dim = td.dimension
                 if dim and dim not in valid_members:
                     errors.append(f"{prefix}: invalid time dimension '{dim}'")
-        if spec.filters:
-            for f in spec.filters:
+        if query.filters:
+            for f in query.filters:
                 member = f.member
                 if member and member not in valid_members:
                     errors.append(f"{prefix}: invalid filter member '{member}'")
-        if spec.order:
-            for key in spec.order:
+        if query.order:
+            for key in query.order:
                 # Strip granularity suffix: fact_daily_ads.date.month → fact_daily_ads.date
                 base_key = ".".join(key.split(".")[:2]) if key.count(".") >= 2 else key
                 if base_key not in valid_members:
@@ -295,9 +292,10 @@ async def planner_node(state: AgentState) -> dict:
     # Include conversation history for follow-up context
     messages = [system] + state["messages"]
 
-    structured_llm = llm.with_structured_output(ReportPlan)
+    structured_llm = llm.with_structured_output(LLMReportPlan)
     try:
-        plan: ReportPlan = await structured_llm.ainvoke(messages)
+        raw_plan: LLMReportPlan = await structured_llm.ainvoke(messages)
+        plan = llm_plan_to_report_plan(raw_plan)
 
         # Validate member names against cube metadata
         valid_members = await get_valid_member_names()
@@ -314,7 +312,8 @@ async def planner_node(state: AgentState) -> dict:
                 )
                 retry_system = SystemMessage(content=system_content + validation_msg)
                 retry_messages = [retry_system] + state["messages"]
-                plan = await structured_llm.ainvoke(retry_messages)
+                raw_plan = await structured_llm.ainvoke(retry_messages)
+                plan = llm_plan_to_report_plan(raw_plan)
                 # Check again; if still invalid, log and proceed
                 retry_errors = _validate_plan_members(plan, valid_members)
                 if retry_errors:
@@ -331,8 +330,8 @@ async def planner_node(state: AgentState) -> dict:
         )
 
     # Reorder: data blocks first, text blocks last — ensures text blocks have data context
-    data_blocks = [b for b in plan.blocks if b.block_type != "text"]
-    text_blocks = [b for b in plan.blocks if b.block_type == "text"]
+    data_blocks = [b for b in plan.blocks if not isinstance(b.spec, TextBlockSpec)]
+    text_blocks = [b for b in plan.blocks if isinstance(b.spec, TextBlockSpec)]
     plan.blocks = data_blocks + text_blocks
 
     logger.info("ReportPlan:\n%s", plan.model_dump_json(indent=2))
@@ -340,14 +339,14 @@ async def planner_node(state: AgentState) -> dict:
     routing_thought = f"Routing to {plan.domain} analytics specialist."
 
     # Check if the plan has any data blocks at all
-    has_data_blocks = any(b.block_type != "text" for b in plan.blocks)
+    has_data_blocks = any(not isinstance(b.spec, TextBlockSpec) for b in plan.blocks)
 
     if not has_data_blocks:
         # Pure text response — no queries needed
         text_parts = []
         for block in plan.blocks:
-            if block.text_guidance:
-                text_parts.append(block.text_guidance)
+            if isinstance(block.spec, TextBlockSpec) and block.spec.text_guidance:
+                text_parts.append(block.spec.text_guidance)
         raw_guidance = " ".join(text_parts) if text_parts else plan.narrative_strategy
 
         if plan.conversational_response:
@@ -409,7 +408,7 @@ async def block_executor_node(state: AgentState) -> dict:
     block_errors = state.get("block_errors", [])
     thoughts = state.get("thought_log", [])
 
-    if block_plan.block_type == "text":
+    if isinstance(block_plan.spec, TextBlockSpec):
         # Generate text using LLM with context from previously executed blocks
         llm = _get_llm()
         question = _get_user_question(state)
@@ -433,7 +432,7 @@ async def block_executor_node(state: AgentState) -> dict:
             f"Conversation history:\n{history}\n\n"
             f"Report context: {plan.narrative_strategy}\n\n"
             f"This text block's purpose: {block_plan.purpose}\n"
-            f"Guidance: {block_plan.text_guidance or 'Write a clear, concise paragraph.'}\n\n"
+            f"Guidance: {block_plan.spec.text_guidance or 'Write a clear, concise paragraph.'}\n\n"
             f"Available data from other blocks:\n{data_context}\n\n"
             "Write a clear, concise paragraph that directly addresses the purpose above. "
             "Use specific numbers from the data and conversation history if available. "
@@ -452,79 +451,70 @@ async def block_executor_node(state: AgentState) -> dict:
 
     else:
         # Data block — build query, execute with retry
-        spec = block_plan.query_spec
-        if not spec:
+        spec = block_plan.spec
+        cube_query = _build_cube_query(spec.query)
+        if not cube_query:
             executed_block = ExecutedBlock(
                 block_id=block_plan.block_id,
                 block_plan=block_plan,
-                error="No query_spec provided for data block",
+                error="Query validation failed",
             )
-            block_errors = block_errors + [f"Block {block_plan.block_id}: no query_spec"]
-            thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {block_plan.block_type} (error: no query)"
+            block_errors = block_errors + [f"Block {block_plan.block_id}: query validation failed"]
+            thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {spec.type} (validation error)"
         else:
-            cube_query = _build_cube_query(spec)
-            if not cube_query:
+            current_query = cube_query
+            last_error: str | None = None
+            data: list[dict] | None = None
+
+            for attempt in range(1 + MAX_BLOCK_RETRIES):
+                try:
+                    logger.info(
+                        "Executing block %s query (attempt %d):\n%s",
+                        block_plan.block_id, attempt + 1, current_query.model_dump_json(indent=2),
+                    )
+                    result = await cube_client.execute_cube_query(current_query)
+                    data = result.get("data", [])
+                    last_error = None
+                    break  # success
+                except Exception as exc:
+                    last_error = str(exc)
+                    logger.warning(
+                        "Block %s attempt %d failed: %s", block_plan.block_id, attempt + 1, last_error,
+                    )
+                    if attempt >= MAX_BLOCK_RETRIES:
+                        break
+                    if _is_transient_error(exc):
+                        await asyncio.sleep(TRANSIENT_RETRY_DELAY * (attempt + 1))
+                    else:
+                        # Try LLM correction
+                        cube_meta_ctx = await get_cube_meta_context()
+                        corrected = await _llm_correct_query(
+                            block_plan, current_query, last_error, cube_meta_ctx,
+                        )
+                        if corrected:
+                            new_query = _build_cube_query(corrected)
+                            if new_query:
+                                current_query = new_query
+                                continue
+                        break  # correction failed, stop retrying
+
+            if last_error:
                 executed_block = ExecutedBlock(
                     block_id=block_plan.block_id,
                     block_plan=block_plan,
-                    error="Query validation failed",
+                    cube_query=current_query,
+                    error=last_error,
                 )
-                block_errors = block_errors + [f"Block {block_plan.block_id}: query validation failed"]
-                thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {block_plan.block_type} (validation error)"
+                block_errors = block_errors + [f"Block {block_plan.block_id}: {last_error}"]
+                thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {spec.type} (error)"
             else:
-                current_query = cube_query
-                last_error: str | None = None
-                data: list[dict] | None = None
-
-                for attempt in range(1 + MAX_BLOCK_RETRIES):
-                    try:
-                        logger.info(
-                            "Executing block %s query (attempt %d):\n%s",
-                            block_plan.block_id, attempt + 1, current_query.model_dump_json(indent=2),
-                        )
-                        result = await cube_client.execute_cube_query(current_query)
-                        data = result.get("data", [])
-                        last_error = None
-                        break  # success
-                    except Exception as exc:
-                        last_error = str(exc)
-                        logger.warning(
-                            "Block %s attempt %d failed: %s", block_plan.block_id, attempt + 1, last_error,
-                        )
-                        if attempt >= MAX_BLOCK_RETRIES:
-                            break
-                        if _is_transient_error(exc):
-                            await asyncio.sleep(TRANSIENT_RETRY_DELAY * (attempt + 1))
-                        else:
-                            # Try LLM correction
-                            cube_meta_ctx = await get_cube_meta_context()
-                            corrected = await _llm_correct_query(
-                                block_plan, current_query, last_error, cube_meta_ctx,
-                            )
-                            if corrected:
-                                new_query = _build_cube_query(corrected)
-                                if new_query:
-                                    current_query = new_query
-                                    continue
-                            break  # correction failed, stop retrying
-
-                if last_error:
-                    executed_block = ExecutedBlock(
-                        block_id=block_plan.block_id,
-                        block_plan=block_plan,
-                        cube_query=current_query.to_cube_api_payload(),
-                        error=last_error,
-                    )
-                    block_errors = block_errors + [f"Block {block_plan.block_id}: {last_error}"]
-                    thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {block_plan.block_type} (error)"
-                else:
-                    executed_block = ExecutedBlock(
-                        block_id=block_plan.block_id,
-                        block_plan=block_plan,
-                        cube_query=current_query.to_cube_api_payload(),
-                        data=data,
-                    )
-                    thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {block_plan.block_type} ({len(data or [])} rows)"
+                executed_block = ExecutedBlock(
+                    block_id=block_plan.block_id,
+                    block_plan=block_plan,
+                    cube_query=current_query,
+                    data=data,
+                )
+                thought = f"Executed block {idx + 1}/{len(plan.blocks)}: {spec.type} ({len(data or [])} rows)"
 
     return {
         "executed_blocks": executed + [executed_block.model_dump()],
@@ -546,7 +536,7 @@ async def reviewer_node(state: AgentState) -> dict:
     block_summaries = []
     for eb_data in executed:
         eb = ExecutedBlock(**eb_data)
-        parts = [f"- **{eb.block_id}** ({eb.block_plan.block_type}) — Purpose: {eb.block_plan.purpose}"]
+        parts = [f"- **{eb.block_id}** ({eb.block_plan.spec.type}) — Purpose: {eb.block_plan.purpose}"]
         if eb.error:
             parts.append(f"  ERROR: {eb.error}")
         elif eb.text_content:
@@ -557,7 +547,7 @@ async def reviewer_node(state: AgentState) -> dict:
                 preview = json.dumps(eb.data[:5], default=str)
                 parts.append(f"  Data preview (first 5 rows): {preview}")
             if eb.cube_query:
-                parts.append(f"  Query: {json.dumps(eb.cube_query, default=str)}")
+                parts.append(f"  Query: {eb.cube_query.model_dump_json()}")
         else:
             parts.append("  No data")
         block_summaries.append("\n".join(parts))
@@ -618,46 +608,43 @@ async def assembler_node(state: AgentState) -> dict:
     # Convert executed blocks into report blocks
     for eb_data in executed_sorted:
         eb = ExecutedBlock(**eb_data)
-        bp = eb.block_plan
+        spec = eb.block_plan.spec
 
         if eb.error:
             # Skip blocks with errors
             continue
 
-        if bp.block_type == "text":
+        if isinstance(spec, TextBlockSpec):
             if eb.text_content:
                 blocks.append(TextBlock(content=eb.text_content))
 
-        elif bp.block_type == "chart_line":
-            spec = bp.query_spec
-            if spec and eb.data is not None and eb.cube_query:
+        elif isinstance(spec, LineChartBlockSpec):
+            if eb.data is not None and eb.cube_query:
                 blocks.append(LineChartBlock(
                     title=spec.title,
-                    x_axis_key=spec.x_or_category_key or "",
-                    y_axis_key=spec.y_or_value_key or "",
-                    cube_query=CubeQuery(**eb.cube_query),
+                    x_axis_key=spec.x_axis_key,
+                    y_axis_key=spec.y_axis_key,
+                    cube_query=eb.cube_query,
                     data=eb.data,
                 ))
 
-        elif bp.block_type == "chart_bar":
-            spec = bp.query_spec
-            if spec and eb.data is not None and eb.cube_query:
+        elif isinstance(spec, BarChartBlockSpec):
+            if eb.data is not None and eb.cube_query:
                 blocks.append(BarChartBlock(
                     title=spec.title,
-                    category_key=spec.x_or_category_key or "",
-                    value_key=spec.y_or_value_key or "",
-                    cube_query=CubeQuery(**eb.cube_query),
+                    category_key=spec.category_key,
+                    value_key=spec.value_key,
+                    cube_query=eb.cube_query,
                     data=eb.data,
                 ))
 
-        elif bp.block_type == "table":
-            spec = bp.query_spec
-            if spec and eb.data is not None and eb.cube_query:
-                columns = spec.columns or list(eb.data[0].keys()) if eb.data else []
+        elif isinstance(spec, TableBlockSpec):
+            if eb.data is not None and eb.cube_query:
+                columns = spec.columns or (list(eb.data[0].keys()) if eb.data else [])
                 blocks.append(TableBlock(
                     title=spec.title,
                     columns=columns,
-                    cube_query=CubeQuery(**eb.cube_query),
+                    cube_query=eb.cube_query,
                     data=eb.data,
                 ))
 

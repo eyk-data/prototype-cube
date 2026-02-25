@@ -14,16 +14,16 @@ Question: "How has our ad spend trended over the last 6 months?"
   "summary_title": "Ad Spend Trend — Last 6 Months",
   "narrative_strategy": "Show the monthly ad spend trend with a line chart, preceded by a brief summary.",
   "blocks": [
-    {"block_id": "block_1", "block_type": "text", "purpose": "Summarize the overall ad spend trend", "query_spec": null, "text_guidance": "Describe the overall ad spend trajectory over the past 6 months."},
+    {"block_id": "block_1", "block_type": "text", "purpose": "Summarize the overall ad spend trend",
+     "text_guidance": "Describe the overall ad spend trajectory over the past 6 months."},
     {"block_id": "block_2", "block_type": "chart_line", "purpose": "Visualize monthly ad spend over time",
-     "query_spec": {
+     "title": "Monthly Ad Spend", "x_axis_key": "fact_daily_ads.date.month", "y_axis_key": "fact_daily_ads.cost",
+     "query": {
        "measures": ["fact_daily_ads.cost"],
        "dimensions": [],
        "time_dimensions": [{"dimension": "fact_daily_ads.date", "granularity": "month", "dateRange": "Last 6 months"}],
-       "filters": null, "order": null, "limit": null,
-       "title": "Monthly Ad Spend", "x_or_category_key": "fact_daily_ads.date.month", "y_or_value_key": "fact_daily_ads.cost",
-       "columns": null
-     }, "text_guidance": null}
+       "filters": null, "order": null, "limit": null
+     }}
   ],
   "conversational_response": false
 }
@@ -38,15 +38,15 @@ Question: "What are the top 10 products by gross sales this month?"
   "narrative_strategy": "Rank products by gross sales in a bar chart, with a text summary highlighting the leader.",
   "blocks": [
     {"block_id": "block_1", "block_type": "chart_bar", "purpose": "Rank the top 10 products by gross sales",
-     "query_spec": {
+     "title": "Top 10 Products by Gross Sales", "category_key": "dim_product_variants.combined_name", "value_key": "fact_sales_items.gross_sales",
+     "query": {
        "measures": ["fact_sales_items.gross_sales"],
        "dimensions": ["dim_product_variants.combined_name"],
        "time_dimensions": [{"dimension": "fact_sales_items.line_timestamp", "dateRange": "This month"}],
-       "filters": null, "order": {"fact_sales_items.gross_sales": "desc"}, "limit": 10,
-       "title": "Top 10 Products by Gross Sales", "x_or_category_key": "dim_product_variants.combined_name", "y_or_value_key": "fact_sales_items.gross_sales",
-       "columns": null
-     }, "text_guidance": null},
-    {"block_id": "block_2", "block_type": "text", "purpose": "Highlight the top seller", "query_spec": null, "text_guidance": "Call out the #1 product and its gross sales figure."}
+       "filters": null, "order": {"fact_sales_items.gross_sales": "desc"}, "limit": 10
+     }},
+    {"block_id": "block_2", "block_type": "text", "purpose": "Highlight the top seller",
+     "text_guidance": "Call out the #1 product and its gross sales figure."}
   ],
   "conversational_response": false
 }
@@ -60,7 +60,8 @@ Question: "Which one had the highest margin?"
   "summary_title": "Highest Margin Product",
   "narrative_strategy": "Answer from conversation history — no new queries needed.",
   "blocks": [
-    {"block_id": "block_1", "block_type": "text", "purpose": "Answer the follow-up question using prior data", "query_spec": null, "text_guidance": "Based on the data shown above, Product X had the highest gross margin at Y%."}
+    {"block_id": "block_1", "block_type": "text", "purpose": "Answer the follow-up question using prior data",
+     "text_guidance": "Based on the data shown above, Product X had the highest gross margin at Y%."}
   ],
   "conversational_response": true
 }
@@ -103,16 +104,17 @@ _STATIC_SYSTEM_PROMPT = (
     + SALES_INSTRUCTIONS + "\n\n"
 
     "## Available Block Types\n"
-    "- **text**: A narrative paragraph explaining insights. Use for introductions, "
-    "summaries, and contextual explanations. No query needed.\n"
-    "- **chart_line**: A line chart for trends over time. REQUIRES a time dimension "
-    "with granularity in the query. Set x_or_category_key to the time dimension "
-    "(e.g. 'fact_daily_ads.date.day') and y_or_value_key to the measure.\n"
-    "- **chart_bar**: A bar chart for categorical comparisons. Best for comparing "
-    "a few groups. Set x_or_category_key to the category dimension and y_or_value_key "
-    "to the measure.\n"
-    "- **table**: A data table for detailed numbers. Set columns to the list of "
-    "member names to display. Good for showing exact values.\n\n"
+    "Each block has a `block_type` field that determines which other fields are required:\n"
+    "- **text** (`block_type = \"text\"`): A narrative paragraph explaining insights. "
+    "Set `text_guidance` to describe what to write about. No `query` needed.\n"
+    "- **chart_line** (`block_type = \"chart_line\"`): A line chart for trends over time. "
+    "REQUIRES a time dimension with granularity in the query. Set `x_axis_key` to the "
+    "time dimension (e.g. 'fact_daily_ads.date.day') and `y_axis_key` to the measure.\n"
+    "- **chart_bar** (`block_type = \"chart_bar\"`): A bar chart for categorical comparisons. "
+    "Best for comparing a few groups. Set `category_key` to the category dimension and "
+    "`value_key` to the measure.\n"
+    "- **table** (`block_type = \"table\"`): A data table for detailed numbers. Set `columns` "
+    "to the list of member names to display. Good for showing exact values.\n\n"
 
     "## Data Storytelling Principles\n"
     "1. Lead with the key insight (text block)\n"
@@ -121,12 +123,12 @@ _STATIC_SYSTEM_PROMPT = (
     "4. Conclude with context or recommendations if appropriate\n\n"
 
     "## Query Construction for Each Block\n"
-    "- Each block gets its OWN optimized query — do NOT try to reuse one query for all blocks.\n"
-    "- Line charts MUST include granularity in time_dimensions (day/week/month).\n"
+    "- Each data block gets its OWN optimized `query` — do NOT try to reuse one query for all blocks.\n"
+    "- Line charts MUST include granularity in `query.time_dimensions`.\n"
     "- Bar charts should limit to a reasonable number of categories (5-10 max).\n"
     "- Tables can show more columns and rows than charts.\n"
-    "- Text blocks don't need query_spec (set to null).\n"
-    "- For text blocks, set text_guidance describing what to write about.\n\n"
+    "- Text blocks don't need a `query` (set to null).\n"
+    "- For text blocks, set `text_guidance` describing what to write about.\n\n"
 
     "## Conversational Follow-Ups\n"
     "Before planning any data queries, check the conversation history below.\n"
