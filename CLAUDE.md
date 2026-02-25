@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A prototype for Cube.js multi-tenancy, demonstrating dynamic tenant loading with per-tenant database destinations. Built as a proof-of-concept for integrating Cube.js as a caching layer with multi-tenant support (Eyk x Embeddable).
+An AI-powered analytics chat application. Users ask questions in natural language; a pydantic-ai agent pipeline plans analytics queries, executes them against Cube (BigQuery), and assembles a report with text, charts, and tables.
 
 ## Running the Prototype
 
@@ -31,46 +31,47 @@ make dev-stop     # Stop Docker infrastructure
 
 Three services communicate in a chain:
 
-**webapp** (React, port 3000) → **server** (FastAPI, port 8000) → **cube** (Cube.js, port 4000) → **destination DBs** (Postgres)
+**webapp** (React chat UI, port 3000) → **server** (FastAPI + pydantic-ai agents, port 8000) → **cube** (Cube.js, port 4000) → **BigQuery**
 
 Flow:
-1. Webapp fetches tenant list from server
-2. User selects a tenant; webapp requests a JWT from server (`/tenants/{id}/token`)
-3. Server encodes tenant's destination config + data models into a JWT signed with `CUBEJS_API_SECRET`
-4. Webapp creates a Cube.js client using that JWT and queries Cube
-5. Cube reads the JWT security context to dynamically connect to the correct Postgres destination via `driver_factory` and load the right data models via `repository_factory`
+1. User asks a question in the chat UI
+2. Webapp sends the message to `POST /api/chat` (Vercel AI SDK data stream protocol)
+3. Server runs a pydantic-ai/pydantic-graph analytics workflow: Planner → Block Executor (loop) → Reviewer → Assembler
+4. Block Executor queries Cube (BigQuery) via REST API, Cube handles caching and pre-aggregations
+5. Assembled report (text, charts, tables) streams back to the webapp
 
 **Key files:**
-- `cube/cube.py` — Cube.js Python config: `driver_factory`, `repository_factory`, `context_to_app_id`, `scheduled_refresh_contexts`
-- `server/main.py` — FastAPI app with SQLModel (SQLite). Defines `Tenant`, `Destination` models and JWT generation endpoint
-- `webapp/src/App.js` — React frontend using `@cubejs-client/core` and `@cubejs-client/react`
+- `server/main.py` — FastAPI app: chat endpoints, chat history persistence (PostgreSQL via SQLModel)
+- `server/agent/` — pydantic-ai agents and pydantic-graph workflow (nodes, orchestrator, streaming, prompts, models)
+- `cube/cube.js` — Cube.js config: BigQuery driver, security context (dataset from JWT)
+- `cube/model/` — Cube YAML data models
+- `webapp/src/` — React frontend using assistant-ui + Tailwind CSS
 
 ## Server (FastAPI)
 
-- Python 3.9, dependencies in `server/requirements.txt`
-- Uses SQLModel (SQLAlchemy + Pydantic) with a local SQLite database (`api.db`)
-- Seeds test data (2 destinations, 2 tenants) on startup via `setup()` in the lifespan handler
-- API secret shared with Cube: `CUBEJS_API_SECRET = "apisecret"`
+- Python 3.9+, dependencies in `server/requirements.txt`
+- Uses SQLModel (SQLAlchemy + Pydantic) with PostgreSQL for chat history persistence
+- pydantic-ai agents for analytics workflow orchestration
+- API secret shared with Cube: `CUBEJS_API_SECRET`
 
 **Endpoints:**
-- `GET /tenants/` — list tenants
-- `GET /tenants/{id}` — get tenant
-- `GET /tenants/{id}/token` — generate JWT for Cube
-- `GET /destinations/` — list destinations
-- `GET /destinations/{id}` — get destination
+- `GET /cube-token` — generate JWT for Cube (BigQuery dataset)
+- `POST /api/chat` — streaming chat endpoint (Vercel AI SDK UI Message Stream Protocol v1)
+- `GET /api/chats/` — list chat sessions
+- `GET /api/chats/{thread_id}/messages` — get messages for a chat
+- `DELETE /api/chats/{thread_id}` — delete a chat session
 
 ## Cube Configuration
 
-- `cube/cube.py` uses the Cube Python SDK (`from cube import config, file_repository`)
-- Data models live in `cube/model/cubes/` (subdirs: `ecommerce_attribution`, `paid_performance`) and `cube/model/views/`
-- Multi-tenancy is implemented via security context in JWT — each tenant gets isolated app ID, orchestrator ID, and pre-aggregation schema
-- `driver_factory` maps the destination config from the JWT to a Postgres connection; only `postgres` type is implemented
+- `cube/cube.js` configures the BigQuery driver via environment variables and GCP service account credentials
+- Data models live in `cube/model/cubes/` and `cube/model/views/` (YAML)
+- Security context in JWT carries the BigQuery dataset name
 
 ## Webapp (React)
 
-- Create React App with `@cubejs-client/core` + `@cubejs-client/react`
-- No build tooling beyond CRA defaults; no test suite configured beyond CRA placeholder
-- Uses Ant Design (`antd`) for table rendering
+- Built with assistant-ui for the chat interface and Tailwind CSS for styling
+- Uses recharts for chart rendering in analytics reports
+- Communicates with the server via Vercel AI SDK data stream protocol
 
 ## Verifying Changes
 
@@ -85,7 +86,3 @@ When implementing a plan:
 1. **ALWAYS create a todo list** that includes verification/testing steps as explicit tasks — not just the implementation steps.
 2. **ALWAYS run verification steps** after implementing changes. Never skip them, even if the code "looks right."
 3. Iterate until verification passes. Do not mark work as done until tests/checks confirm it works.
-
-## Dummy Data
-
-`dummy_data/` contains SQL init scripts (`fill_destination1.sql`, `fill_destination2.sql`) that populate the two Postgres containers on startup.
