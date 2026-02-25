@@ -65,7 +65,8 @@ def report_to_content_parts(report_data: dict) -> list[dict]:
                     "title": block.title,
                     "x_axis_key": block.x_axis_key,
                     "y_axis_key": block.y_axis_key,
-                    "data": block.data or [],
+                    "query_spec": block.cube_query.to_cube_api_payload(),
+                    "data_override": block.data or [],
                 },
                 "result": "{}",
             })
@@ -84,7 +85,8 @@ def report_to_content_parts(report_data: dict) -> list[dict]:
                     "title": block.title,
                     "category_key": block.category_key,
                     "value_key": block.value_key,
-                    "data": block.data or [],
+                    "query_spec": block.cube_query.to_cube_api_payload(),
+                    "data_override": block.data or [],
                 },
                 "result": "{}",
             })
@@ -102,7 +104,8 @@ def report_to_content_parts(report_data: dict) -> list[dict]:
                     "type": "table",
                     "title": block.title,
                     "columns": block.columns,
-                    "data": block.data or [],
+                    "query_spec": block.cube_query.to_cube_api_payload(),
+                    "data_override": block.data or [],
                 },
                 "result": "{}",
             })
@@ -142,7 +145,8 @@ def _stream_report_blocks(report: AnalyticsReport):
                 "title": block.title,
                 "x_axis_key": block.x_axis_key,
                 "y_axis_key": block.y_axis_key,
-                "data": block.data or [],
+                "query_spec": block.cube_query.to_cube_api_payload(),
+                "data_override": block.data or [],
             }
             for line in _tool_call_lines("chart_line", args):
                 yield line
@@ -153,7 +157,8 @@ def _stream_report_blocks(report: AnalyticsReport):
                 "title": block.title,
                 "category_key": block.category_key,
                 "value_key": block.value_key,
-                "data": block.data or [],
+                "query_spec": block.cube_query.to_cube_api_payload(),
+                "data_override": block.data or [],
             }
             for line in _tool_call_lines("chart_bar", args):
                 yield line
@@ -163,7 +168,8 @@ def _stream_report_blocks(report: AnalyticsReport):
                 "type": "table",
                 "title": block.title,
                 "columns": block.columns,
-                "data": block.data or [],
+                "query_spec": block.cube_query.to_cube_api_payload(),
+                "data_override": block.data or [],
             }
             for line in _tool_call_lines("table", args):
                 yield line

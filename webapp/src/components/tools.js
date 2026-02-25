@@ -19,7 +19,7 @@ export const LineChartTool = makeAssistantToolUI({
         title={args.title}
         x_axis_key={args.x_axis_key}
         y_axis_key={args.y_axis_key}
-        data={args.data}
+        data={args.data_override}
       />
     );
   },
@@ -41,7 +41,7 @@ export const BarChartTool = makeAssistantToolUI({
         title={args.title}
         category_key={args.category_key}
         value_key={args.value_key}
-        data={args.data}
+        data={args.data_override}
       />
     );
   },
@@ -62,7 +62,7 @@ export const TableTool = makeAssistantToolUI({
       <DataTableViz
         title={args.title}
         columns={args.columns}
-        data={args.data}
+        data={args.data_override}
       />
     );
   },
