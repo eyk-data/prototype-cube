@@ -24,8 +24,7 @@ Question: "How has our ad spend trended over the last 6 months?"
        "time_dimensions": [{"dimension": "fact_daily_ads.date", "granularity": "month", "dateRange": "Last 6 months"}],
        "filters": null, "order": null, "limit": null
      }}
-  ],
-  "conversational_response": false
+  ]
 }
 ```
 
@@ -47,8 +46,7 @@ Question: "What are the top 10 products by gross sales this month?"
      }},
     {"block_id": "block_2", "type": "text", "purpose": "Highlight the top seller",
      "text_guidance": "Call out the #1 product and its gross sales figure."}
-  ],
-  "conversational_response": false
+  ]
 }
 ```
 
@@ -61,9 +59,30 @@ Question: "Which one had the highest margin?"
   "narrative_strategy": "Answer from conversation history — no new queries needed.",
   "blocks": [
     {"block_id": "block_1", "type": "text", "purpose": "Answer the follow-up question using prior data",
-     "text_guidance": "Based on the data shown above, Product X had the highest gross margin at Y%."}
-  ],
-  "conversational_response": true
+     "text_guidance": "Answer which product had the highest margin, referencing the top-10 products data from the previous response."}
+  ]
+}
+```
+
+### Example 4 — Follow-up that needs new data (plan queries, don't refuse)
+Conversation history shows daily total sales. User asks: "Which product contributed most to revenue?"
+```json
+{
+  "domain": "sales",
+  "summary_title": "Top Products by Revenue Contribution",
+  "narrative_strategy": "The previous report showed total daily sales without a product breakdown. Query product-level sales to find the top contributor.",
+  "blocks": [
+    {"block_id": "block_1", "type": "chart_bar", "purpose": "Rank products by gross sales contribution",
+     "title": "Top Products by Gross Sales", "category_key": "dim_product_variants.combined_name", "value_key": "fact_sales_items.gross_sales",
+     "query": {
+       "measures": ["fact_sales_items.gross_sales"],
+       "dimensions": ["dim_product_variants.combined_name"],
+       "time_dimensions": [{"dimension": "fact_sales_items.line_timestamp", "dateRange": "Last 40 days"}],
+       "filters": null, "order": {"fact_sales_items.gross_sales": "desc"}, "limit": 10
+     }},
+    {"block_id": "block_2", "type": "text", "purpose": "Highlight the top revenue contributor",
+     "text_guidance": "Call out the #1 product and its share of total revenue."}
+  ]
 }
 ```
 
@@ -135,17 +154,18 @@ PLANNER_IDENTITY = (
     "- For text blocks, set `text_guidance` describing what to write about.\n\n"
 
     "## Conversational Follow-Ups\n"
-    "Before planning any data queries, check the conversation history below.\n"
-    "If the user's question can be answered from previous results already in the "
-    "conversation (e.g. 'what was the best selling product?' after you already showed "
-    "top products), or if the user explicitly says 'do not run a query':\n"
-    "- Set `conversational_response` to true\n"
+    "Before planning, check the conversation history.\n\n"
+    "**If the answer is already in the conversation history** "
+    "(e.g. 'what was the best selling product?' after showing top products with product-level data), "
+    "or if the user explicitly says 'do not run a query':\n"
     "- Produce ONLY text blocks (no data blocks)\n"
-    "- Write the **actual answer** in `text_guidance` — include specific numbers and "
-    "details from the conversation history. Do NOT write vague planning notes.\n"
-    "- Respect explicit user instructions like 'do not run a query'\n\n"
-    "If the question requires new data not present in conversation history, "
-    "set `conversational_response` to false and plan data blocks as normal.\n\n"
+    "- In `text_guidance`, describe what the answer should cover and which data "
+    "points from the conversation history to reference\n\n"
+    "**If the answer requires new data not in the history** "
+    "(e.g. asking about products after only seeing total sales, or requesting a different time range), "
+    "plan data blocks with queries as normal — treat it like a fresh question.\n\n"
+    "**NEVER** produce a text-only response that says you lack the data to answer. "
+    "If you don't have the data, plan a query to get it.\n\n"
 
     + FEW_SHOT_EXAMPLES
 )
