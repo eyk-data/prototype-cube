@@ -22,7 +22,7 @@ from sqlmodel import (
     JSON,
 )
 
-from server.agent.streaming import langgraph_to_datastream
+from server.agent.streaming import langgraph_to_datastream, report_to_content_parts
 
 
 CUBE_API_SECRET = os.environ.get("CUBE_API_SECRET") or os.environ.get("CUBEJS_API_SECRET", "apisecret")
@@ -247,7 +247,12 @@ async def get_chat_messages(thread_id: str):
         if isinstance(msg, HumanMessage):
             result.append({"id": msg.id, "role": "user", "content": msg.content})
         elif isinstance(msg, AIMessage):
-            result.append({"id": msg.id, "role": "assistant", "content": msg.content})
+            report_data = msg.additional_kwargs.get("analytics_report")
+            if report_data:
+                content_parts = report_to_content_parts(report_data)
+                result.append({"id": msg.id, "role": "assistant", "content": content_parts})
+            else:
+                result.append({"id": msg.id, "role": "assistant", "content": msg.content})
     return result
 
 

@@ -175,9 +175,10 @@ def _make_early_exit_report(
         ],
     )
     ai_text = render_report_as_text(report)
+    report_dict = report.model_dump()
     result = {
-        "analytics_report": report.model_dump(),
-        "messages": [AIMessage(content=ai_text)],
+        "analytics_report": report_dict,
+        "messages": [AIMessage(content=ai_text, additional_kwargs={"analytics_report": report_dict})],
         "specialist_domain": domain,
     }
     if not is_revision:
@@ -666,9 +667,10 @@ async def assembler_node(state: AgentState) -> dict:
     )
     logger.info("AnalyticsReport:\n%s", report.model_dump_json(indent=2))
     ai_text = render_report_as_text(report)
+    report_dict = report.model_dump()
     return {
-        "analytics_report": report.model_dump(),
-        "messages": [AIMessage(content=ai_text)],
+        "analytics_report": report_dict,
+        "messages": [AIMessage(content=ai_text, additional_kwargs={"analytics_report": report_dict})],
     }
 
 

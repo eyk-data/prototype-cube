@@ -25,6 +25,94 @@ def _tool_call_lines(tool_name: str, args: dict) -> list[str]:
     return [call_line, result_line]
 
 
+def report_to_content_parts(report_data: dict) -> list[dict]:
+    """Convert an AnalyticsReport dict into assistant-ui ThreadMessageLike content parts.
+
+    Returns a list of {"type": "text", ...} and {"type": "tool-call", ...} entries
+    that assistant-ui can render when loading chat history.
+    """
+    report = AnalyticsReport(**report_data)
+    parts: list[dict] = []
+
+    # Collect text content (title + text blocks)
+    text_pieces: list[str] = []
+    title_emitted = False
+
+    for block in report.blocks:
+        if isinstance(block, ThoughtBlock):
+            continue
+
+        if isinstance(block, TextBlock):
+            if not title_emitted:
+                text_pieces.append(f"## {report.summary_title}\n\n")
+                title_emitted = True
+            text_pieces.append(block.content + "\n\n")
+
+        elif isinstance(block, LineChartBlock):
+            # Flush accumulated text before a tool-call
+            if text_pieces:
+                parts.append({"type": "text", "text": "".join(text_pieces)})
+                text_pieces = []
+            call_id = f"call_{uuid.uuid4().hex[:24]}"
+            parts.append({
+                "type": "tool-call",
+                "toolCallId": call_id,
+                "toolName": "chart_line",
+                "args": {
+                    "title": block.title,
+                    "x_axis_key": block.x_axis_key,
+                    "y_axis_key": block.y_axis_key,
+                    "data": block.data or [],
+                },
+                "result": "{}",
+            })
+
+        elif isinstance(block, BarChartBlock):
+            if text_pieces:
+                parts.append({"type": "text", "text": "".join(text_pieces)})
+                text_pieces = []
+            call_id = f"call_{uuid.uuid4().hex[:24]}"
+            parts.append({
+                "type": "tool-call",
+                "toolCallId": call_id,
+                "toolName": "chart_bar",
+                "args": {
+                    "title": block.title,
+                    "category_key": block.category_key,
+                    "value_key": block.value_key,
+                    "data": block.data or [],
+                },
+                "result": "{}",
+            })
+
+        elif isinstance(block, TableBlock):
+            if text_pieces:
+                parts.append({"type": "text", "text": "".join(text_pieces)})
+                text_pieces = []
+            call_id = f"call_{uuid.uuid4().hex[:24]}"
+            parts.append({
+                "type": "tool-call",
+                "toolCallId": call_id,
+                "toolName": "table",
+                "args": {
+                    "title": block.title,
+                    "columns": block.columns,
+                    "data": block.data or [],
+                },
+                "result": "{}",
+            })
+
+    # Flush any remaining text
+    if text_pieces:
+        parts.append({"type": "text", "text": "".join(text_pieces)})
+
+    # Ensure at least one text part exists (assistant-ui requires it)
+    if not parts:
+        parts.append({"type": "text", "text": ""})
+
+    return parts
+
+
 async def langgraph_to_datastream(
     messages: list[dict], thread_id: str
 ) -> AsyncGenerator[str, None]:
