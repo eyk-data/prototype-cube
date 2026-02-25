@@ -39,6 +39,7 @@ services:
     env_file:
       - ./cube/.env
     environment:
+      - CUBE_BASE_URL=http://cube:4000
       - GOOGLE_APPLICATION_CREDENTIALS=/code/gcp-credentials.json
       - DATABASE_URL=postgresql+psycopg://postgres:postgres@server-db:5432/server
     restart: on-failure

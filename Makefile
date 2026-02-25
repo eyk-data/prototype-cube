@@ -2,13 +2,15 @@
 -include cube/.env
 export
 
+PYTHON := python3.11
+
 .PHONY: dev-setup dev-infra dev-server dev-webapp dev-stop
 
 ## One-time setup: create venv, install Python + Node deps
 dev-setup:
-	python3 -m venv .venv
+	$(PYTHON) -m venv .venv
 	.venv/bin/pip install --upgrade pip
-	.venv/bin/pip install -r server/requirements.txt
+	.venv/bin/pip install -r server/requirements.lock
 	cd webapp && npm install
 
 ## Start infrastructure (PostgreSQL + Cube) in Docker

@@ -4,6 +4,7 @@ __pycache__
 .DS_Store
 .env
 .env.local
+.python-version
 
 # Cube: keep config and model, ignore data and credentials
 cube/.cubestore
