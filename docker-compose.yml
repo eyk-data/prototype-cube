@@ -2,7 +2,7 @@ version: "3"
 
 services:
   cube:
-    image: cubejs/cube:v0.36.0
+    image: cubejs/cube:v1.3.24
     ports:
       - 4000:4000
     environment:
