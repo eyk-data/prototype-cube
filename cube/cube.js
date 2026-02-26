@@ -1,7 +1,7 @@
 const EykApiClient = require('./eykApiClient');
 
 const EYK_API_BASE_URL = 'http://eyk-django-api:5000';
-const EYK_API_USERNAME = 'cube@eykdata.com';
+const EYK_API_USERNAME = 'tech+cube@eykdata.com';
 const EYK_API_PASSWORD = 'Test1234!';
 
 const apiClient = new EykApiClient(EYK_API_BASE_URL, EYK_API_USERNAME, EYK_API_PASSWORD);
