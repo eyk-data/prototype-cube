@@ -1,77 +1,193 @@
-const EykApiClient = require('./eykApiClient');
 
 const EYK_API_BASE_URL = 'http://eyk-django-api:5000';
 const EYK_API_USERNAME = 'tech+cube@eykdata.com';
 const EYK_API_PASSWORD = 'Test1234!';
 
-const apiClient = new EykApiClient(EYK_API_BASE_URL, EYK_API_USERNAME, EYK_API_PASSWORD);
-
-const getServiceAccountForConnection = async (connectionId) => {
-  return await apiClient.getServiceAccount(connectionId);
-};
-
-// Cache for scheduler contexts - used as fallback for schema compilation
-let cachedSchedulerContexts = null;
-
-// Load and cache scheduler contexts
-const loadSchedulerContexts = async () => {
-  try {
-    const contexts = await apiClient.getSchedulerContexts();
-    cachedSchedulerContexts = contexts;
-    console.log(`Scheduler contexts loaded: ${contexts.length}`);
-    return contexts;
-  } catch (error) {
-    console.error('Failed to load scheduler contexts:', error);
-    return [];
+class EykApiClient {
+  constructor(baseUrl, username, password) {
+    this.baseUrl = baseUrl;
+    this.username = username;
+    this.password = password;
+    this.accessToken = null;
+    this.tokenExpiry = null;
   }
-};
 
-// Get a default context for schema compilation when no security context is provided
-const getDefaultContext = () => {
-  if (cachedSchedulerContexts && cachedSchedulerContexts.length > 0) {
-    console.log('Using first scheduler context as default for schema compilation');
-    return cachedSchedulerContexts[0];
+  fetchWithTimeout(url, options = {}) {
+    return fetch(url, {
+      ...options,
+      signal: AbortSignal.timeout(10000),
+    });
   }
-  return null;
-};
 
-module.exports = {
+  decodeJWT(token) {
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      throw new Error('Invalid JWT token format');
+    }
+    const payload = Buffer.from(parts[1], 'base64').toString('utf-8');
+    return JSON.parse(payload);
+  }
 
-  driverFactory: async ({ securityContext }) => {
-    console.log('DEBUG: Incoming Security Context:', JSON.stringify(securityContext));
+  async login() {
+    const response = await this.fetchWithTimeout(
+      `${this.baseUrl}/auth/jwt/create/`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: this.username,
+          password: this.password,
+        }),
+      },
+    );
 
-    // Use provided security context or fall back to first scheduler context
-    const context = securityContext?.connection ? securityContext : getDefaultContext();
-
-    if (!context?.connection) {
-      console.warn('No valid context available for driverFactory - schema compilation may fail');
-      return null;
+    if (!response.ok) {
+      throw new Error(`Login failed: ${response.status} ${await response.text()}`);
     }
 
-    const service_account = await getServiceAccountForConnection(context.connection);
+    const data = await response.json();
+    this.accessToken = data.access;
+
+    try {
+      const decoded = this.decodeJWT(this.accessToken);
+      this.tokenExpiry = decoded.exp
+        ? new Date(decoded.exp * 1000)
+        : new Date(Date.now() + 15 * 60 * 1000);
+    } catch (err) {
+      console.warn(`Failed to decode JWT, using 15min default expiry: ${err.message}`);
+      this.tokenExpiry = new Date(Date.now() + 15 * 60 * 1000);
+    }
+
+    console.log(`JWT token obtained, expires at ${this.tokenExpiry.toISOString()}`);
+  }
+
+  async ensureAuthenticated() {
+    if (
+      !this.accessToken ||
+      !this.tokenExpiry ||
+      Date.now() >= this.tokenExpiry.getTime() - 30000
+    ) {
+      await this.login();
+    }
+  }
+
+  async authenticatedFetch(url, context) {
+    await this.ensureAuthenticated();
+
+    const doFetch = () =>
+      this.fetchWithTimeout(url, {
+        headers: { Authorization: `Bearer ${this.accessToken}` },
+      });
+
+    let response;
+    try {
+      response = await doFetch();
+    } catch (err) {
+      console.warn(`${context}: network error, retrying: ${err.message}`);
+      response = await doFetch();
+    }
+
+    if (response.status === 401) {
+      console.warn(`${context}: got 401, re-authenticating`);
+      await this.login();
+      response = await doFetch();
+    }
+
+    if (response.status >= 500) {
+      console.warn(`${context}: got ${response.status}, retrying`);
+      response = await doFetch();
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `${context}: ${response.status} ${await response.text()}`,
+      );
+    }
+
+    return response.json();
+  }
+
+  async getSchedulerContexts() {
+    return this.authenticatedFetch(
+      `${this.baseUrl}/api/cube/config/refresh-contexts`,
+      'Failed to get scheduler contexts',
+    );
+  }
+
+  async getServiceAccount(connectionId) {
+    return this.authenticatedFetch(
+      `${this.baseUrl}/api/cube/config/${connectionId}/service-account`,
+      'Failed to get service account',
+    );
+  }
+}
+
+const apiClient = new EykApiClient(
+  EYK_API_BASE_URL,
+  EYK_API_USERNAME,
+  EYK_API_PASSWORD,
+);
+
+const CONTEXTS_TTL_MS = 5 * 60 * 1000;
+let cachedContexts = null;
+let contextsFetchedAt = 0;
+
+async function getCachedContexts() {
+  if (!cachedContexts || Date.now() - contextsFetchedAt > CONTEXTS_TTL_MS) {
+    try {
+      cachedContexts = await apiClient.getSchedulerContexts();
+      contextsFetchedAt = Date.now();
+    } catch (err) {
+      if (cachedContexts) {
+        console.warn(`Failed to refresh contexts, using stale cache: ${err.message}`);
+        return cachedContexts;
+      }
+      throw err;
+    }
+  }
+  return cachedContexts;
+}
+
+module.exports = {
+  driverFactory: async ({ securityContext }) => {
+    const contexts = await getCachedContexts();
+    const fallback = contexts[0]?.securityContext;
+
+    const connectionId = securityContext?.connection || fallback?.connection;
+
+    if (!connectionId) {
+      throw new Error(
+        'No connectionId available: securityContext.connection is missing and no cached contexts found',
+      );
+    }
+
+    const serviceAccount = await apiClient.getServiceAccount(connectionId);
+
     return {
       type: 'bigquery',
-      projectId: service_account.project_id,
-      credentials: service_account,
-      dataset: context.dataset,
+      projectId: serviceAccount.project_id,
+      credentials: serviceAccount,
+      dataset: securityContext?.dataset || fallback?.dataset,
     };
   },
 
   contextToAppId: ({ securityContext }) => {
-    // Handle empty context during schema compilation
     const connectionId = securityContext?.connection || 'default';
     return `CUBE_APP_${connectionId}`;
   },
 
   contextToOrchestratorId: ({ securityContext }) => {
-    // Isolate connection pools and pre-aggregations per tenant
     const connectionId = securityContext?.connection || 'default';
     const dataset = securityContext?.dataset || 'default';
     return `CUBE_ORCH_${connectionId}_${dataset}`;
   },
 
   scheduledRefreshContexts: async () => {
-    return await loadSchedulerContexts();
-  }
-
+    try {
+      return await getCachedContexts();
+    } catch (e) {
+      console.error('Failed to fetch refresh contexts:', e.message);
+      return [];
+    }
+  },
 };
