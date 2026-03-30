@@ -1,0 +1,171 @@
+"""Dynamic Cube model metadata with TTL cache for agent prompts."""
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass, field
+
+from . import cube_client
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+_CACHE_TTL = 300  # 5 minutes
+
+QUERY_FORMAT_INSTRUCTIONS = """\
+## Join Relationships
+- fact_sales_items → dim_product_variants, dim_customers
+- fact_attributions → dim_product_variants, dim_customers, dim_attribution_models, fact_daily_ads
+- email_performance has no joins (standalone)
+
+## Query Construction Rules
+
+### Time Dimensions (CRITICAL)
+timeDimensions serves two purposes: date filtering AND time grouping. The `granularity` key controls which:
+
+1. **Date filtering only (no time grouping)** — OMIT granularity:
+   Use when the user wants totals/aggregates within a date range (e.g. "top products in the last 30 days",
+   "total revenue this month").
+   {"dimension": "cube.field", "dateRange": "Last 30 days"}
+   This filters rows to the date range but does NOT add a time column to results.
+
+2. **Trend over time (time grouping)** — INCLUDE granularity:
+   Use when the user wants to see how something changes over time (e.g. "daily revenue trend",
+   "monthly sales over the past year", "week-over-week performance").
+   {"dimension": "cube.field", "granularity": "day|week|month|quarter|year", "dateRange": "Last 6 months"}
+   This adds a time column to results, grouping rows by the chosen period.
+
+**Decision rule:** If the question asks for a ranking, total, comparison, or "top/bottom N" within a time range
+→ OMIT granularity. If the question asks for a trend, evolution, or pattern over time → INCLUDE granularity.
+
+### Valid dateRange Formats
+- Relative: "Last 30 days", "Last 7 days", "Last 6 months", "Last year", "This month", "This quarter", "This year", "Today", "Yesterday"
+- Absolute array: ["2024-01-01", "2024-12-31"]
+
+### Filters
+{"member": "cube.field", "operator": "<op>", "values": ["..."]}
+Operators: equals, notEquals, contains, notContains, gt, gte, lt, lte, set, notSet, startsWith, endsWith,
+inDateRange, notInDateRange, beforeDate, afterDate, beforeOrOnDate, afterOrOnDate
+
+### Order and Limit
+- Order: {"cube.field": "asc|desc"}
+- Use limit (e.g. 10) for "top N" or "bottom N" questions. Combine with order to get ranked results.
+
+### General Rules
+- When querying across joined cubes, use measures from the fact table with dimensions from the joined dimension table.
+- Always prefix member names with the cube name (e.g. fact_sales_items.gross_sales, NOT just gross_sales).
+"""
+
+FALLBACK_TEXT = (
+    "## Available Cubes & Members\n\n"
+    "(Cube metadata is temporarily unavailable. Use your best judgement "
+    "based on the user's question.)\n\n"
+    + QUERY_FORMAT_INSTRUCTIONS
+)
+
+# Map Cube meta API aggType values to the labels used in prompts.
+# aggType "number" means a derived/calculated metric (no direct aggregation).
+_AGG_TYPE_MAP = {
+    "number": "calculated",
+    "countDistinct": "count_distinct",
+    "runningTotal": "running_total",
+}
+
+
+@dataclass
+class _CubeMetaCache:
+    text: str | None = None
+    raw_meta: dict | None = None
+    _cached_at: float = field(default=0.0, repr=False)
+
+    @property
+    def is_fresh(self) -> bool:
+        return self.text is not None and (time.monotonic() - self._cached_at) < _CACHE_TTL
+
+    def update(self, text: str, raw_meta: dict) -> None:
+        self.text = text
+        self.raw_meta = raw_meta
+        self._cached_at = time.monotonic()
+
+
+_cache = _CubeMetaCache()
+
+
+def _is_visible(member: dict) -> bool:
+    return member.get("isVisible", True) and member.get("public", True)
+
+
+def _format_measure(m: dict) -> str:
+    agg = m.get("aggType", m.get("type", ""))
+    display_type = _AGG_TYPE_MAP.get(agg, agg)
+    return f"{m['name']} ({display_type})"
+
+
+def _format_dimension(d: dict) -> str:
+    return f"{d['name']} ({d.get('type', 'string')})"
+
+
+def format_cube_meta(meta: dict) -> str:
+    """Transform the /meta JSON response into prompt-friendly text."""
+    lines = ["## Available Cubes & Members\n"]
+    cubes = meta.get("cubes", [])
+
+    for cube in cubes:
+        name = cube.get("name", "")
+        title = cube.get("title", name)
+        lines.append(f"### {name} ({title})")
+
+        measures = [m for m in cube.get("measures", []) if _is_visible(m)]
+        if measures:
+            formatted = ", ".join(_format_measure(m) for m in measures)
+            lines.append(f"Measures: {formatted}")
+
+        dimensions = [d for d in cube.get("dimensions", []) if _is_visible(d)]
+        if dimensions:
+            formatted = ", ".join(_format_dimension(d) for d in dimensions)
+            lines.append(f"Dimensions: {formatted}")
+
+        lines.append("")  # blank line between cubes
+
+    return "\n".join(lines)
+
+
+async def get_cube_meta_context() -> str:
+    """Return formatted cube metadata, using a 5-minute TTL cache.
+
+    On fetch failure, returns stale cache if available, otherwise a fallback string.
+    """
+    if _cache.is_fresh:
+        return _cache.text  # type: ignore[return-value]
+
+    try:
+        meta = await cube_client.fetch_cube_meta()
+        text = format_cube_meta(meta) + "\n" + QUERY_FORMAT_INSTRUCTIONS
+        _cache.update(text, meta)
+        logger.info("Cube meta cache refreshed")
+        return text
+    except Exception:
+        logger.warning("Failed to fetch Cube metadata", exc_info=True)
+        if _cache.text is not None:
+            logger.info("Serving stale Cube meta cache")
+            return _cache.text
+        return FALLBACK_TEXT
+
+
+async def get_valid_member_names() -> set[str] | None:
+    """Return set of all valid cube member names. None if metadata unavailable."""
+    # Ensure cache is populated
+    if _cache.raw_meta is None:
+        await get_cube_meta_context()
+    if _cache.raw_meta is None:
+        return None
+
+    names: set[str] = set()
+    for cube in _cache.raw_meta.get("cubes", []):
+        for m in cube.get("measures", []):
+            if _is_visible(m):
+                names.add(m["name"])
+        for d in cube.get("dimensions", []):
+            if _is_visible(d):
+                names.add(d["name"])
+    return names

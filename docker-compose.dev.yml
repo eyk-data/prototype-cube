@@ -1,0 +1,31 @@
+version: "3"
+
+services:
+  cube:
+    image: cubejs/cube:v0.36.0
+    ports:
+      - 4000:4000
+    environment:
+      - CUBEJS_DEV_MODE=true
+      - CUBEJS_DB_TYPE=bigquery
+      - CUBEJS_DB_BQ_KEY_FILE=/cube/conf/gcp-credentials.json
+    volumes:
+      - ./cube:/cube/conf
+    env_file:
+      - ./cube/.env
+    restart: on-failure
+
+  server-db:
+    image: postgres:16-alpine
+    ports:
+      - 5432:5432
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: server
+    volumes:
+      - server_db_data:/var/lib/postgresql/data
+    restart: on-failure
+
+volumes:
+  server_db_data:

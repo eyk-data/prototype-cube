@@ -7,7 +7,7 @@ This repo provides a **local self-hosted Cube** setup that can replace the Embed
 - **cube/** – Cube config and data models
   - `cube.js` – BigQuery driver config, security context (dataset from JWT or env).
   - `model/` – Cube YAML models (from eyk-analytics), use `COMPILE_CONTEXT.securityContext.dataset`.
-- **server/** – Backend that issues Cube JWTs (`/cube-token`) and tenant APIs.
+- **server/** – Backend that issues Cube JWTs (`/cube-token`) and chat API.
 - **webapp/** – React app that calls the Cube API (and server for token).
 
 ## Running the prototype
@@ -30,7 +30,7 @@ docker compose up
 ```
 
 - **Cube API**: http://localhost:4000
-- **Server**: http://localhost:8000 (tenants, `/cube-token`)
+- **Server**: http://localhost:8000 (JWT endpoint, chat API)
 - **Webapp**: http://localhost:3001
 
 The webapp is configured with `REACT_APP_USE_SELF_HOSTED_CUBE=true` and fetches a Cube JWT from `GET /cube-token`, then queries Cube for **paid_performance** and **ecommerce_attribution**.
